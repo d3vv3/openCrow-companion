@@ -64,10 +64,10 @@ fun QrScanScreen(onPaired: () -> Unit) {
             modifier = Modifier
                 .fillMaxSize()
                 .padding(padding)
-                .padding(spacing.lg),
-            horizontalAlignment = Alignment.CenterHorizontally,
-            verticalArrangement = Arrangement.Center
+                .padding(horizontal = spacing.lg),
+            horizontalAlignment = Alignment.CenterHorizontally
         ) {
+            Spacer(Modifier.height(spacing.xl))
             Text(
                 text = "openCrow",
                 style = MaterialTheme.typography.headlineLarge,
@@ -83,19 +83,28 @@ fun QrScanScreen(onPaired: () -> Unit) {
             Spacer(Modifier.height(spacing.xl))
 
             if (!state.permissionsRequested) {
-                CircularProgressIndicator(color = MaterialTheme.colorScheme.primary)
+                Box(
+                    modifier = Modifier.weight(1f),
+                    contentAlignment = Alignment.Center
+                ) {
+                    CircularProgressIndicator(color = MaterialTheme.colorScheme.primary)
+                }
             } else if (!state.hasCameraPermission) {
-                Text(
-                    text = "Camera permission is required to scan the QR code.",
-                    style = MaterialTheme.typography.bodyMedium,
-                    color = MaterialTheme.colorScheme.error,
-                    textAlign = TextAlign.Center
-                )
+                Box(
+                    modifier = Modifier.weight(1f),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Text(
+                        text = "Camera permission is required to scan the QR code.",
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.error,
+                        textAlign = TextAlign.Center
+                    )
+                }
             } else {
                 Box(
                     modifier = Modifier
-                        .fillMaxWidth()
-                        .aspectRatio(1f)
+                        .size(280.dp)
                         .padding(spacing.md),
                     contentAlignment = Alignment.Center
                 ) {
@@ -121,14 +130,15 @@ fun QrScanScreen(onPaired: () -> Unit) {
             }
 
             state.error?.let {
-                Spacer(Modifier.height(spacing.md))
                 Text(
                     text = it,
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.error,
-                    textAlign = TextAlign.Center
+                    textAlign = TextAlign.Center,
+                    modifier = Modifier.padding(vertical = spacing.md)
                 )
             }
+            Spacer(Modifier.height(spacing.lg))
         }
     }
 }
