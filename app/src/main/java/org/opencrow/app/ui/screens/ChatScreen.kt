@@ -35,6 +35,7 @@ import okhttp3.MultipartBody
 import okhttp3.RequestBody.Companion.asRequestBody
 import org.opencrow.app.OpenCrowApp
 import org.opencrow.app.data.remote.dto.*
+import org.opencrow.app.ui.components.MarkdownText
 import org.opencrow.app.ui.theme.LocalSpacing
 import java.io.File
 import java.text.SimpleDateFormat
@@ -231,6 +232,8 @@ fun ChatScreen(
     }
 
     val hasActiveChat = activeConversationId != null && messages.isNotEmpty()
+    val activeConversation = conversations.find { it.id == activeConversationId }
+    val isTelegramChat = activeConversation?.title?.contains("[telegram]", ignoreCase = true) == true
 
     Box(modifier = Modifier.fillMaxSize()) {
         Scaffold(
@@ -238,12 +241,24 @@ fun ChatScreen(
             topBar = {
                 TopAppBar(
                     title = {
-                        Text(
-                            text = conversations.find { it.id == activeConversationId }?.title ?: "openCrow",
-                            style = MaterialTheme.typography.titleLarge,
-                            maxLines = 1,
-                            overflow = TextOverflow.Ellipsis
-                        )
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            if (isTelegramChat) {
+                                Icon(
+                                    Icons.Outlined.Lock,
+                                    contentDescription = "Read-only",
+                                    modifier = Modifier
+                                        .size(16.dp)
+                                        .padding(end = 4.dp),
+                                    tint = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                            }
+                            Text(
+                                text = activeConversation?.title ?: "openCrow",
+                                style = MaterialTheme.typography.titleLarge,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis
+                            )
+                        }
                     },
                     navigationIcon = {
                         Row {
@@ -343,113 +358,142 @@ fun ChatScreen(
                     }
                 }
 
-                // Input bar
-                Surface(
-                    color = MaterialTheme.colorScheme.surfaceContainerLowest,
-                    tonalElevation = 3.dp,
-                    modifier = Modifier.fillMaxWidth()
-                ) {
-                    Row(
-                        modifier = Modifier
-                            .padding(horizontal = spacing.sm, vertical = spacing.sm)
-                            .navigationBarsPadding(),
-                        verticalAlignment = Alignment.Bottom,
-                        horizontalArrangement = Arrangement.spacedBy(spacing.xs)
+                // Input bar — hidden for Telegram conversations (readonly)
+                if (isTelegramChat) {
+                    Surface(
+                        color = MaterialTheme.colorScheme.surfaceContainerLowest,
+                        tonalElevation = 3.dp,
+                        modifier = Modifier.fillMaxWidth()
                     ) {
-                        // Attach button
-                        IconButton(
-                            onClick = { /* placeholder */ },
-                            modifier = Modifier.size(40.dp)
+                        Row(
+                            modifier = Modifier
+                                .padding(horizontal = spacing.md, vertical = spacing.md)
+                                .navigationBarsPadding(),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.Center
                         ) {
                             Icon(
-                                Icons.Outlined.AttachFile,
-                                contentDescription = "Attach",
+                                Icons.Outlined.Lock,
+                                contentDescription = null,
+                                modifier = Modifier.size(16.dp),
                                 tint = MaterialTheme.colorScheme.onSurfaceVariant
                             )
-                        }
-
-                        // Model selector (disabled placeholder)
-                        IconButton(
-                            onClick = { /* placeholder for model selector */ },
-                            enabled = false,
-                            modifier = Modifier.size(40.dp)
-                        ) {
-                            Icon(
-                                Icons.Outlined.SmartToy,
-                                contentDescription = "Model",
-                                tint = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.4f)
+                            Spacer(Modifier.width(spacing.sm))
+                            Text(
+                                "Telegram conversations are read-only",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
                             )
                         }
-
-                        // Text input
-                        TextField(
-                            value = composing,
-                            onValueChange = { composing = it },
-                            modifier = Modifier.weight(1f),
-                            placeholder = {
-                                Text(
-                                    if (activeConversationId != null) "Message openCrow..." else "Start a new conversation...",
-                                    style = MaterialTheme.typography.bodyMedium
-                                )
-                            },
-                            colors = TextFieldDefaults.colors(
-                                focusedContainerColor = MaterialTheme.colorScheme.surfaceContainerHigh,
-                                unfocusedContainerColor = MaterialTheme.colorScheme.surfaceContainerHigh,
-                                focusedIndicatorColor = MaterialTheme.colorScheme.primary,
-                                unfocusedIndicatorColor = Color.Transparent,
-                                cursorColor = MaterialTheme.colorScheme.primary
-                            ),
-                            textStyle = MaterialTheme.typography.bodyMedium,
-                            maxLines = 4,
-                            shape = MaterialTheme.shapes.small
-                        )
-
-                        // Mic button
-                        IconButton(
-                            onClick = {
-                                if (recording) {
-                                    stopRecordingAndTranscribe()
-                                } else if (!transcribing) {
-                                    if (ContextCompat.checkSelfPermission(context, Manifest.permission.RECORD_AUDIO)
-                                        == PackageManager.PERMISSION_GRANTED
-                                    ) {
-                                        startRecording()
-                                    }
-                                }
-                            },
-                            enabled = !transcribing,
-                            modifier = Modifier.size(40.dp)
+                    }
+                } else {
+                    Surface(
+                        color = MaterialTheme.colorScheme.surfaceContainerLowest,
+                        tonalElevation = 3.dp,
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Row(
+                            modifier = Modifier
+                                .padding(horizontal = spacing.sm, vertical = spacing.sm)
+                                .navigationBarsPadding(),
+                            verticalAlignment = Alignment.Bottom,
+                            horizontalArrangement = Arrangement.spacedBy(spacing.xs)
                         ) {
-                            if (transcribing) {
-                                CircularProgressIndicator(
-                                    modifier = Modifier.size(20.dp),
-                                    strokeWidth = 2.dp,
-                                    color = MaterialTheme.colorScheme.primary
-                                )
-                            } else {
+                            // Attach button
+                            IconButton(
+                                onClick = { /* placeholder */ },
+                                modifier = Modifier.size(40.dp)
+                            ) {
                                 Icon(
-                                    Icons.Filled.Mic,
-                                    contentDescription = if (recording) "Stop recording" else "Record",
-                                    tint = if (recording) MaterialTheme.colorScheme.error
-                                    else MaterialTheme.colorScheme.onSurfaceVariant
+                                    Icons.Outlined.AttachFile,
+                                    contentDescription = "Attach",
+                                    tint = MaterialTheme.colorScheme.onSurfaceVariant
                                 )
                             }
-                        }
 
-                        // Send button
-                        FilledIconButton(
-                            onClick = { sendMessage(composing) },
-                            enabled = composing.isNotBlank() && !sending,
-                            modifier = Modifier.size(40.dp),
-                            shape = MaterialTheme.shapes.small,
-                            colors = IconButtonDefaults.filledIconButtonColors(
-                                containerColor = MaterialTheme.colorScheme.primary,
-                                contentColor = MaterialTheme.colorScheme.onPrimary,
-                                disabledContainerColor = MaterialTheme.colorScheme.surfaceContainerHigh,
-                                disabledContentColor = MaterialTheme.colorScheme.onSurfaceVariant
+                            // Model selector (disabled placeholder)
+                            IconButton(
+                                onClick = { /* placeholder for model selector */ },
+                                enabled = false,
+                                modifier = Modifier.size(40.dp)
+                            ) {
+                                Icon(
+                                    Icons.Outlined.SmartToy,
+                                    contentDescription = "Model",
+                                    tint = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.4f)
+                                )
+                            }
+
+                            // Text input
+                            TextField(
+                                value = composing,
+                                onValueChange = { composing = it },
+                                modifier = Modifier.weight(1f),
+                                placeholder = {
+                                    Text(
+                                        if (activeConversationId != null) "Message openCrow..." else "Start a new conversation...",
+                                        style = MaterialTheme.typography.bodyMedium
+                                    )
+                                },
+                                colors = TextFieldDefaults.colors(
+                                    focusedContainerColor = MaterialTheme.colorScheme.surfaceContainerHigh,
+                                    unfocusedContainerColor = MaterialTheme.colorScheme.surfaceContainerHigh,
+                                    focusedIndicatorColor = MaterialTheme.colorScheme.primary,
+                                    unfocusedIndicatorColor = Color.Transparent,
+                                    cursorColor = MaterialTheme.colorScheme.primary
+                                ),
+                                textStyle = MaterialTheme.typography.bodyMedium,
+                                maxLines = 4,
+                                shape = MaterialTheme.shapes.small
                             )
-                        ) {
-                            Icon(Icons.Filled.Send, contentDescription = "Send", modifier = Modifier.size(18.dp))
+
+                            // Mic button
+                            IconButton(
+                                onClick = {
+                                    if (recording) {
+                                        stopRecordingAndTranscribe()
+                                    } else if (!transcribing) {
+                                        if (ContextCompat.checkSelfPermission(context, Manifest.permission.RECORD_AUDIO)
+                                            == PackageManager.PERMISSION_GRANTED
+                                        ) {
+                                            startRecording()
+                                        }
+                                    }
+                                },
+                                enabled = !transcribing,
+                                modifier = Modifier.size(40.dp)
+                            ) {
+                                if (transcribing) {
+                                    CircularProgressIndicator(
+                                        modifier = Modifier.size(20.dp),
+                                        strokeWidth = 2.dp,
+                                        color = MaterialTheme.colorScheme.primary
+                                    )
+                                } else {
+                                    Icon(
+                                        Icons.Filled.Mic,
+                                        contentDescription = if (recording) "Stop recording" else "Record",
+                                        tint = if (recording) MaterialTheme.colorScheme.error
+                                        else MaterialTheme.colorScheme.onSurfaceVariant
+                                    )
+                                }
+                            }
+
+                            // Send button
+                            FilledIconButton(
+                                onClick = { sendMessage(composing) },
+                                enabled = composing.isNotBlank() && !sending,
+                                modifier = Modifier.size(40.dp),
+                                shape = MaterialTheme.shapes.small,
+                                colors = IconButtonDefaults.filledIconButtonColors(
+                                    containerColor = MaterialTheme.colorScheme.primary,
+                                    contentColor = MaterialTheme.colorScheme.onPrimary,
+                                    disabledContainerColor = MaterialTheme.colorScheme.surfaceContainerHigh,
+                                    disabledContentColor = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                            ) {
+                                Icon(Icons.Filled.Send, contentDescription = "Send", modifier = Modifier.size(18.dp))
+                            }
                         }
                     }
                 }
@@ -527,7 +571,7 @@ fun MessageBubble(message: MessageDto, isTranscribed: Boolean = false) {
                             tint = MaterialTheme.colorScheme.onPrimaryContainer.copy(alpha = 0.6f)
                         )
                     }
-                    Text(
+                    MarkdownText(
                         text = message.content,
                         style = MaterialTheme.typography.bodyMedium,
                         color = if (isUser) MaterialTheme.colorScheme.onPrimaryContainer
@@ -718,6 +762,19 @@ fun HistorySheet(
                                                 text = conv.automationKind ?: "auto",
                                                 style = MaterialTheme.typography.labelSmall,
                                                 color = MaterialTheme.colorScheme.onPrimaryContainer,
+                                                modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
+                                            )
+                                        }
+                                    }
+                                    if (conv.title.contains("[telegram]", ignoreCase = true)) {
+                                        Surface(
+                                            color = MaterialTheme.colorScheme.tertiaryContainer,
+                                            shape = MaterialTheme.shapes.extraSmall
+                                        ) {
+                                            Text(
+                                                text = "telegram",
+                                                style = MaterialTheme.typography.labelSmall,
+                                                color = MaterialTheme.colorScheme.onTertiaryContainer,
                                                 modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
                                             )
                                         }
