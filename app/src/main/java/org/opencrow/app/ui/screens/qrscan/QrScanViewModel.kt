@@ -95,7 +95,7 @@ class QrScanViewModel(
                     return@launch
                 }
 
-                // Register device capabilities (best-effort)
+                // Register device capabilities
                 val capabilities = listOf(
                     DeviceCapability("set_alarm", "Set a one-time or recurring alarm"),
                     DeviceCapability("create_contact", "Add a contact to the phone's address book"),
@@ -103,10 +103,20 @@ class QrScanViewModel(
                     DeviceCapability("send_sms", "Send an SMS to a number"),
                     DeviceCapability("create_calendar_event", "Add an event to the calendar")
                 )
-                try {
+                val registerResp = try {
                     apiClient.api.registerDevice(payload.id, RegisterDeviceRequest(capabilities))
                 } catch (e: Exception) {
-                    Log.w(TAG, "Device register failed (non-fatal): ${e.message}")
+                    Log.e(TAG, "Device register failed: ${e.message}", e)
+                    _uiState.update {
+                        it.copy(error = "Device registration failed: ${e.message}", pairing = false)
+                    }
+                    return@launch
+                }
+                if (!registerResp.isSuccessful) {
+                    _uiState.update {
+                        it.copy(error = "Device registration failed (${registerResp.code()})", pairing = false)
+                    }
+                    return@launch
                 }
 
                 _uiState.update { it.copy(paired = true, pairing = false) }
