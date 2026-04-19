@@ -29,8 +29,14 @@ interface ConversationDao {
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun upsertAll(conversations: List<CachedConversation>)
 
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun upsert(conversation: CachedConversation)
+
     @Query("DELETE FROM cached_conversations")
     suspend fun deleteAll()
+
+    @Query("DELETE FROM cached_conversations WHERE id = :id")
+    suspend fun deleteById(id: String)
 }
 
 @Dao

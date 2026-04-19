@@ -34,6 +34,8 @@ import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.MultipartBody
 import okhttp3.RequestBody.Companion.asRequestBody
 import org.opencrow.app.OpenCrowApp
+import org.opencrow.app.data.local.entity.CachedConversation
+import org.opencrow.app.data.local.entity.CachedMessage
 import org.opencrow.app.data.remote.dto.*
 import org.opencrow.app.ui.components.MarkdownText
 import org.opencrow.app.ui.theme.LocalSpacing
@@ -68,30 +70,54 @@ fun ChatScreen(
     var mediaRecorder by remember { mutableStateOf<MediaRecorder?>(null) }
     var audioFile by remember { mutableStateOf<File?>(null) }
 
-    // Load conversations on mount
+    val conversationDao = app.database.conversationDao()
+    val messageDao = app.database.messageDao()
+
+    // Load conversations: cache-first, then refresh from network
     LaunchedEffect(Unit) {
+        // Show cached conversations instantly
+        val cached = conversationDao.getAll()
+        if (cached.isNotEmpty()) {
+            conversations = cached.map { it.toDto() }.sortedByDescending { it.updatedAt }
+        }
+        // Then refresh from network in background
         try {
             val resp = app.apiClient.api.listConversations()
             if (resp.isSuccessful) {
-                conversations = resp.body()?.conversations.orEmpty()
+                val fresh = resp.body()?.conversations.orEmpty()
                     .sortedByDescending { it.updatedAt }
+                conversations = fresh
+                // Update cache
+                conversationDao.deleteAll()
+                conversationDao.upsertAll(fresh.map { it.toCached() })
             }
         } catch (e: Exception) {
             Log.e("Chat", "Failed to load conversations", e)
         }
     }
 
-    // Load messages when conversation changes
+    // Load messages when conversation changes: cache-first, then refresh
     LaunchedEffect(activeConversationId) {
         val convId = activeConversationId ?: run {
             messages = emptyList()
             return@LaunchedEffect
         }
-        loadingMessages = true
+        // Show cached messages instantly
+        val cached = messageDao.getByConversation(convId)
+        if (cached.isNotEmpty()) {
+            messages = cached.map { it.toDto() }
+        } else {
+            loadingMessages = true
+        }
+        // Then refresh from network
         try {
             val resp = app.apiClient.api.listMessages(convId)
             if (resp.isSuccessful) {
-                messages = resp.body()?.messages.orEmpty()
+                val fresh = resp.body()?.messages.orEmpty()
+                messages = fresh
+                // Update cache
+                messageDao.deleteByConversation(convId)
+                messageDao.upsertAll(fresh.map { it.toCached() })
             }
         } catch (e: Exception) {
             Log.e("Chat", "Failed to load messages", e)
@@ -113,6 +139,8 @@ fun ChatScreen(
         scope.launch {
             try {
                 var convId = activeConversationId
+                val now = SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ss.SSS'Z'", Locale.US).format(Date())
+
                 // Create conversation if needed
                 if (convId == null) {
                     val createResp = app.apiClient.api.createConversation(
@@ -122,9 +150,10 @@ fun ChatScreen(
                         val newConv = createResp.body()!!
                         convId = newConv.id
                         activeConversationId = convId
-                        conversations = listOf(
-                            ConversationDto(newConv.id, newConv.title, newConv.createdAt, newConv.updatedAt)
-                        ) + conversations
+                        val dto = ConversationDto(newConv.id, newConv.title, newConv.createdAt, newConv.updatedAt)
+                        conversations = listOf(dto) + conversations
+                        // Cache the new conversation
+                        conversationDao.upsert(dto.toCached())
                     } else {
                         sending = false
                         return@launch
@@ -137,7 +166,7 @@ fun ChatScreen(
                     conversationId = convId!!,
                     role = "user",
                     content = text,
-                    createdAt = ""
+                    createdAt = now
                 )
                 messages = messages + tempMsg
 
@@ -147,26 +176,35 @@ fun ChatScreen(
                 )
                 if (completeResp.isSuccessful) {
                     val output = completeResp.body()!!.output
-                    // Reload messages to get the assistant message with proper ID
-                    val msgsResp = app.apiClient.api.listMessages(convId)
-                    if (msgsResp.isSuccessful) {
-                        val reloaded = msgsResp.body()?.messages.orEmpty()
-                        if (isTranscribed) {
-                            // Find the real user message that replaced our temp one
-                            val realUserMsg = reloaded.lastOrNull { it.role == "user" }
-                            if (realUserMsg != null) {
-                                transcribedMessageIds = transcribedMessageIds + realUserMsg.id
-                            }
-                        }
-                        messages = reloaded
+
+                    // Append only the assistant reply — the temp user message stays as-is
+                    val assistantMsg = MessageDto(
+                        id = "asst-${System.currentTimeMillis()}",
+                        conversationId = convId,
+                        role = "assistant",
+                        content = output,
+                        createdAt = now
+                    )
+
+                    if (isTranscribed) {
+                        transcribedMessageIds = transcribedMessageIds + tempMsg.id
                     }
+
+                    messages = messages + assistantMsg
+
+                    // Cache both messages
+                    messageDao.upsert(tempMsg.toCached())
+                    messageDao.upsert(assistantMsg.toCached())
                 }
 
-                // Refresh conversation list
-                val convResp = app.apiClient.api.listConversations()
-                if (convResp.isSuccessful) {
-                    conversations = convResp.body()?.conversations.orEmpty()
-                        .sortedByDescending { it.updatedAt }
+                // Update conversation list in-place instead of re-fetching
+                conversations = conversations.map { conv ->
+                    if (conv.id == convId) conv.copy(updatedAt = now) else conv
+                }.sortedByDescending { it.updatedAt }
+
+                // Update the cached conversation timestamp
+                conversations.find { it.id == convId }?.let {
+                    conversationDao.upsert(it.toCached())
                 }
             } catch (e: Exception) {
                 Log.e("Chat", "Send failed", e)
@@ -805,3 +843,41 @@ private fun formatDate(iso: String): String {
         iso.take(10)
     }
 }
+
+// ─── Cache mapping extensions ───
+
+private fun ConversationDto.toCached() = CachedConversation(
+    id = id,
+    title = title,
+    createdAt = createdAt,
+    updatedAt = updatedAt,
+    isAutomatic = isAutomatic,
+    automationKind = automationKind,
+    channel = channel
+)
+
+private fun CachedConversation.toDto() = ConversationDto(
+    id = id,
+    title = title,
+    createdAt = createdAt,
+    updatedAt = updatedAt,
+    isAutomatic = isAutomatic,
+    automationKind = automationKind,
+    channel = channel
+)
+
+private fun MessageDto.toCached() = CachedMessage(
+    id = id,
+    conversationId = conversationId,
+    role = role,
+    content = content,
+    createdAt = createdAt
+)
+
+private fun CachedMessage.toDto() = MessageDto(
+    id = id,
+    conversationId = conversationId,
+    role = role,
+    content = content,
+    createdAt = createdAt
+)
