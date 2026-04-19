@@ -43,7 +43,7 @@ fun AssistScreen(
     val context = LocalContext.current
     val app = context.applicationContext as OpenCrowApp
     val viewModel: AssistViewModel = viewModel(
-        factory = AssistViewModel.Factory(app.container.conversationRepository, app)
+        factory = AssistViewModel.Factory(app.container.conversationRepository, app.container.configRepository, app)
     )
     val state by viewModel.uiState.collectAsState()
     val spacing = LocalSpacing.current
@@ -177,7 +177,7 @@ fun AssistScreen(
                         sending = state.sending || state.streaming,
                         onSend = { viewModel.sendMessage() },
                         focusRequester = focusRequester,
-                        screenshotAvailable = state.screenshotPath != null,
+                        screenshotAvailable = state.screenshotAvailable,
                         attachScreenshot = state.attachScreenshot,
                         onToggleScreenshot = viewModel::toggleAttachScreenshot
                     )

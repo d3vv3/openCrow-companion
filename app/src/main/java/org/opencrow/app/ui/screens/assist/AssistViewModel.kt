@@ -16,6 +16,7 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import org.opencrow.app.data.remote.StreamEvent
 import org.opencrow.app.data.remote.dto.MessageDto
+import org.opencrow.app.data.repository.ConfigRepository
 import org.opencrow.app.data.repository.ConversationRepository
 import java.io.ByteArrayOutputStream
 import java.io.File
@@ -31,16 +32,19 @@ data class AssistUiState(
     val error: String? = null,
     val apiReady: Boolean = false,
     val screenshotPath: String? = null,
+    val screenshotAvailable: Boolean = false,
     val attachScreenshot: Boolean = false
 )
 
 class AssistViewModel(
     private val repository: ConversationRepository,
+    private val configRepository: ConfigRepository,
     private val appContext: Context
 ) : ViewModel() {
 
     companion object {
         private const val TAG = "AssistVM"
+        private const val PREF_ATTACH_SCREENSHOT = "assist_attach_screenshot"
     }
 
     private val _uiState = MutableStateFlow(AssistUiState())
@@ -48,8 +52,23 @@ class AssistViewModel(
 
     private val streamingBuffer = StringBuilder()
 
+    /** Cached user preference — null until loaded from DB */
+    private var savedScreenshotPref: Boolean? = null
+
     init {
         checkApiReady()
+        loadScreenshotPreference()
+    }
+
+    private fun loadScreenshotPreference() {
+        viewModelScope.launch {
+            val saved = configRepository.getLocalSetting(PREF_ATTACH_SCREENSHOT)
+            savedScreenshotPref = saved?.toBooleanStrictOrNull() ?: true
+            // Apply to current state if a screenshot path is already set
+            if (_uiState.value.screenshotPath != null) {
+                _uiState.update { it.copy(attachScreenshot = savedScreenshotPref!!) }
+            }
+        }
     }
 
     private fun checkApiReady() {
@@ -66,11 +85,22 @@ class AssistViewModel(
     }
 
     fun setScreenshotPath(path: String?) {
-        _uiState.update { it.copy(screenshotPath = path, attachScreenshot = path != null) }
+        val pref = savedScreenshotPref ?: true
+        _uiState.update {
+            it.copy(
+                screenshotPath = path,
+                screenshotAvailable = path != null,
+                attachScreenshot = path != null && pref
+            )
+        }
     }
 
     fun toggleAttachScreenshot(attach: Boolean) {
         _uiState.update { it.copy(attachScreenshot = attach) }
+        viewModelScope.launch {
+            configRepository.setLocalSetting(PREF_ATTACH_SCREENSHOT, attach.toString())
+            savedScreenshotPref = attach
+        }
     }
 
     fun updateComposing(text: String) {
@@ -249,11 +279,12 @@ class AssistViewModel(
 
     class Factory(
         private val repository: ConversationRepository,
+        private val configRepository: ConfigRepository,
         private val appContext: Context
     ) : ViewModelProvider.Factory {
         @Suppress("UNCHECKED_CAST")
         override fun <T : ViewModel> create(modelClass: Class<T>): T {
-            return AssistViewModel(repository, appContext) as T
+            return AssistViewModel(repository, configRepository, appContext) as T
         }
     }
 }
