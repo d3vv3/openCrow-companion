@@ -38,6 +38,12 @@ interface ConversationDao {
 
     @Query("DELETE FROM cached_conversations WHERE id = :id")
     suspend fun deleteById(id: String)
+
+    @Transaction
+    suspend fun replaceAll(conversations: List<CachedConversation>) {
+        deleteAll()
+        upsertAll(conversations)
+    }
 }
 
 @Dao
@@ -56,6 +62,12 @@ interface MessageDao {
 
     @Query("DELETE FROM cached_messages WHERE conversationId = :convId")
     suspend fun deleteByConversation(convId: String)
+
+    @Transaction
+    suspend fun replaceByConversation(convId: String, messages: List<CachedMessage>) {
+        deleteByConversation(convId)
+        upsertAll(messages)
+    }
 }
 
 @Dao
@@ -71,4 +83,10 @@ interface ToolCallDao {
 
     @Query("DELETE FROM cached_tool_calls WHERE conversationId = :convId")
     suspend fun deleteByConversation(convId: String)
+
+    @Transaction
+    suspend fun replaceByConversation(convId: String, toolCalls: List<CachedToolCall>) {
+        deleteByConversation(convId)
+        upsertAll(toolCalls)
+    }
 }

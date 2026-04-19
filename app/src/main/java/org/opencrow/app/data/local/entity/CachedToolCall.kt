@@ -1,9 +1,13 @@
 package org.opencrow.app.data.local.entity
 
 import androidx.room.Entity
+import androidx.room.Index
 import androidx.room.PrimaryKey
 
-@Entity(tableName = "cached_tool_calls")
+@Entity(
+    tableName = "cached_tool_calls",
+    indices = [Index(value = ["conversationId"])]
+)
 data class CachedToolCall(
     @PrimaryKey val id: String,
     val conversationId: String,

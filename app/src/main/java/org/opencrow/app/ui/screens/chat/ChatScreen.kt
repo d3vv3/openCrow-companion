@@ -81,8 +81,12 @@ fun ChatScreen(
     }
 
     val hasActiveChat = state.activeConversationId != null && state.messages.isNotEmpty()
-    val activeConversation = state.conversations.find { it.id == state.activeConversationId }
-    val isTelegramChat = activeConversation?.title?.contains("[telegram]", ignoreCase = true) == true
+    val activeConversation = remember(state.conversations, state.activeConversationId) {
+        state.conversations.find { it.id == state.activeConversationId }
+    }
+    val isTelegramChat = remember(activeConversation?.title) {
+        activeConversation?.title?.contains("[telegram]", ignoreCase = true) == true
+    }
 
     Box(modifier = Modifier.fillMaxSize()) {
         Scaffold(
@@ -192,9 +196,15 @@ fun ChatScreen(
                                 contentPadding = PaddingValues(vertical = spacing.md),
                                 verticalArrangement = Arrangement.spacedBy(spacing.sm)
                             ) {
+                                // Snapshot the maps once per composition to avoid
+                                // re-reading state inside each item lambda
+                                val toolCallsMap = state.toolCallsByMessageId
+                                val attachmentsMap = state.attachmentsByMessageId
+                                val transcribedIds = state.transcribedMessageIds
+
                                 items(state.messages, key = { it.id }) { msg ->
-                                    val toolCalls = state.toolCallsByMessageId[msg.id]
-                                    val msgAttachments = state.attachmentsByMessageId[msg.id].orEmpty()
+                                    val toolCalls = toolCallsMap[msg.id]
+                                    val msgAttachments = attachmentsMap[msg.id].orEmpty()
                                     Column(verticalArrangement = Arrangement.spacedBy(spacing.sm)) {
                                         // Show tool calls before the assistant response
                                         if (msg.role == "assistant" && !toolCalls.isNullOrEmpty()) {
@@ -202,7 +212,7 @@ fun ChatScreen(
                                         }
                                     MessageBubble(
                                         message = msg,
-                                        isTranscribed = msg.id in state.transcribedMessageIds,
+                                        isTranscribed = msg.id in transcribedIds,
                                         attachments = msgAttachments
                                     )
                                 }

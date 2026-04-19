@@ -44,8 +44,7 @@ class ConversationRepository(
             val resp = apiClient.api.listConversations()
             if (resp.isSuccessful) {
                 val list = resp.body()?.conversations.orEmpty().sortedByDescending { it.updatedAt }
-                conversationDao.deleteAll()
-                conversationDao.upsertAll(list.map { it.toCached() })
+                conversationDao.replaceAll(list.map { it.toCached() })
                 list
             } else null
         } catch (e: Exception) {
@@ -61,8 +60,7 @@ class ConversationRepository(
             val resp = apiClient.api.listMessages(conversationId)
             if (resp.isSuccessful) {
                 val list = resp.body()?.messages.orEmpty()
-                messageDao.deleteByConversation(conversationId)
-                messageDao.upsertAll(list.map { it.toCached() })
+                messageDao.replaceByConversation(conversationId, list.map { it.toCached() })
                 list
             } else null
         } catch (e: Exception) {
@@ -120,8 +118,7 @@ class ConversationRepository(
             val resp = apiClient.api.listToolCalls(conversationId)
             if (resp.isSuccessful) {
                 val list = resp.body()?.toolCalls.orEmpty()
-                toolCallDao.deleteByConversation(conversationId)
-                toolCallDao.upsertAll(list.map { it.toCached(conversationId) })
+                toolCallDao.replaceByConversation(conversationId, list.map { it.toCached(conversationId) })
                 list
             } else null
         } catch (e: Exception) {

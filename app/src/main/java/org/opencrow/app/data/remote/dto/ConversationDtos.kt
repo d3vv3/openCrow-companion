@@ -1,7 +1,11 @@
 package org.opencrow.app.data.remote.dto
 
+import androidx.compose.runtime.Immutable
+
 // ─── Conversations ───
 data class ConversationsResponse(val conversations: List<ConversationDto>?)
+
+@Immutable
 data class ConversationDto(
     val id: String,
     val title: String,
@@ -15,6 +19,8 @@ data class CreateConversationRequest(val title: String)
 
 // ─── Messages ───
 data class MessagesResponse(val messages: List<MessageDto>?)
+
+@Immutable
 data class MessageDto(
     val id: String,
     val conversationId: String,
@@ -47,6 +53,8 @@ data class ProviderAttemptDto(
     val success: Boolean,
     val error: String?
 )
+
+@Immutable
 data class ToolCallDto(
     val name: String,
     val arguments: Map<String, Any>?,

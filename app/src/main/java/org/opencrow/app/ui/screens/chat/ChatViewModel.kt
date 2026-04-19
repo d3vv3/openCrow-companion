@@ -71,6 +71,13 @@ class ChatViewModel(
     private var mediaRecorder: MediaRecorder? = null
     private var audioFile: File? = null
 
+    /**
+     * Accumulates streaming tokens without copying the entire messages list
+     * on every delta. Flushed to UI state periodically.
+     */
+    private val streamingBuffer = StringBuilder()
+    private var streamingAssistantId: String? = null
+
     init {
         loadConversations()
         observeRefreshSignal()
@@ -145,6 +152,7 @@ class ChatViewModel(
      * Associates tool calls with the assistant message they belong to.
      * Tool calls that occurred between a user message and the next assistant message
      * are grouped under that assistant message's ID.
+     * Uses binary search for O(n log m) instead of O(n*m).
      */
     private fun associateToolCalls(
         messages: List<MessageDto>,
@@ -154,21 +162,27 @@ class ChatViewModel(
 
         val result = mutableMapOf<String, MutableList<ToolCallDto>>()
         val assistantMessages = messages.filter { it.role == "assistant" }
+        if (assistantMessages.isEmpty()) return emptyMap()
+
+        // Pre-sort assistant messages by createdAt for binary search
+        val sortedAssistants = assistantMessages.sortedBy { it.createdAt }
+        val timestamps = sortedAssistants.map { it.createdAt }
 
         for (tc in toolCalls) {
-            // Find the first assistant message whose createdAt >= tool call's createdAt
-            val owner = assistantMessages.firstOrNull { it.createdAt >= tc.createdAt }
-                ?: assistantMessages.lastOrNull()
-            if (owner != null) {
-                result.getOrPut(owner.id) { mutableListOf() }.add(
-                    ToolCallDto(
-                        name = tc.toolName,
-                        arguments = tc.arguments,
-                        status = if (tc.error != null) "error" else "success",
-                        output = tc.error ?: tc.output
-                    )
+            // Binary search for the first assistant message with createdAt >= tc.createdAt
+            var idx = timestamps.binarySearch(tc.createdAt)
+            if (idx < 0) idx = -(idx + 1) // insertion point
+            val owner = if (idx < sortedAssistants.size) sortedAssistants[idx]
+                        else sortedAssistants.last()
+
+            result.getOrPut(owner.id) { mutableListOf() }.add(
+                ToolCallDto(
+                    name = tc.toolName,
+                    arguments = tc.arguments,
+                    status = if (tc.error != null) "error" else "success",
+                    output = tc.error ?: tc.output
                 )
-            }
+            )
         }
         return result
     }
@@ -333,17 +347,27 @@ class ChatViewModel(
                 // Collect tool calls during streaming
                 val streamToolCalls = mutableListOf<ToolCallDto>()
                 var pendingToolCall: String? = null
+                streamingAssistantId = assistantId
+                streamingBuffer.clear()
+                var lastFlushTime = System.currentTimeMillis()
 
                 repository.streamMessage(convId, messageContent).collect { event ->
                     when (event) {
                         is StreamEvent.Delta -> {
-                            _uiState.update { state ->
-                                state.copy(
-                                    messages = state.messages.map { msg ->
-                                        if (msg.id == assistantId) msg.copy(content = msg.content + event.token)
-                                        else msg
-                                    }
-                                )
+                            streamingBuffer.append(event.token)
+                            // Batch UI updates: flush every 80ms instead of per-token
+                            val now3 = System.currentTimeMillis()
+                            if (now3 - lastFlushTime >= 80) {
+                                lastFlushTime = now3
+                                val currentContent = streamingBuffer.toString()
+                                _uiState.update { state ->
+                                    state.copy(
+                                        messages = state.messages.map { msg ->
+                                            if (msg.id == assistantId) msg.copy(content = currentContent)
+                                            else msg
+                                        }
+                                    )
+                                }
                             }
                         }
                         is StreamEvent.ToolCall -> {
@@ -379,7 +403,9 @@ class ChatViewModel(
                             pendingToolCall = null
                         }
                         is StreamEvent.Done -> {
-                            // Replace content with final output
+                            // Flush any remaining buffered content, then replace with final output
+                            streamingBuffer.clear()
+                            streamingAssistantId = null
                             _uiState.update { state ->
                                 state.copy(
                                     streaming = false,
@@ -395,6 +421,8 @@ class ChatViewModel(
                         }
                         is StreamEvent.Error -> {
                             Log.e(TAG, "Stream error: ${event.error}")
+                            streamingBuffer.clear()
+                            streamingAssistantId = null
                             _uiState.update { state ->
                                 state.copy(
                                     streaming = false,

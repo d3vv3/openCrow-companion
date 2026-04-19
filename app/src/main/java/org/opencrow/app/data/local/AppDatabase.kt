@@ -11,7 +11,7 @@ import org.opencrow.app.data.local.entity.CachedToolCall
 
 @Database(
     entities = [AppConfig::class, CachedConversation::class, CachedMessage::class, CachedToolCall::class],
-    version = 2,
+    version = 3,
     exportSchema = false
 )
 abstract class AppDatabase : RoomDatabase() {

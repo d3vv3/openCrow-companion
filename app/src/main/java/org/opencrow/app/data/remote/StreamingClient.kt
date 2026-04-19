@@ -32,15 +32,15 @@ class StreamingClient(private val apiClient: ApiClient) {
 
     private val gson = Gson()
 
+    private val client = OkHttpClient.Builder()
+        .connectTimeout(30, TimeUnit.SECONDS)
+        .readTimeout(0, TimeUnit.MILLISECONDS) // no read timeout for SSE
+        .build()
+
     fun stream(request: CompleteRequest): Flow<StreamEvent> = callbackFlow {
         val baseUrl = apiClient.getBaseUrl()
             ?: throw IllegalStateException("API not configured")
         val accessToken = apiClient.getAccessToken().orEmpty()
-
-        val client = OkHttpClient.Builder()
-            .connectTimeout(30, TimeUnit.SECONDS)
-            .readTimeout(0, TimeUnit.MILLISECONDS) // no read timeout for SSE
-            .build()
 
         val body = gson.toJson(request).toRequestBody("application/json".toMediaType())
         val httpRequest = Request.Builder()
