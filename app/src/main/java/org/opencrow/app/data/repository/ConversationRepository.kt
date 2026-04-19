@@ -96,6 +96,16 @@ class ConversationRepository(
         }
     }
 
+    suspend fun createMessage(conversationId: String, role: String, content: String): MessageDto? {
+        return try {
+            val resp = apiClient.api.createMessage(conversationId, CreateMessageRequest(role, content))
+            if (resp.isSuccessful) resp.body() else null
+        } catch (e: Exception) {
+            Log.e(TAG, "Failed to create message", e)
+            null
+        }
+    }
+
     fun streamMessage(conversationId: String, text: String): kotlinx.coroutines.flow.Flow<StreamEvent> {
         return streamingClient.stream(CompleteRequest(conversationId, text))
     }

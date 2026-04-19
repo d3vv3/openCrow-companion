@@ -296,6 +296,23 @@ class ChatViewModel(
                     }
                 }
 
+                // Persist user message on the server (matches web client behaviour)
+                val savedMsg = repository.createMessage(convId, "user", messageContent)
+                if (savedMsg != null) {
+                    _uiState.update { state ->
+                        val newAttachmentMap = if (pendingAttachments.isNotEmpty()) {
+                            state.attachmentsByMessageId - tempMsg.id + (savedMsg.id to pendingAttachments)
+                        } else state.attachmentsByMessageId
+                        state.copy(
+                            messages = state.messages.map { if (it.id == tempMsg.id) savedMsg.copy(content = displayContent) else it },
+                            transcribedMessageIds = if (isTranscribed)
+                                state.transcribedMessageIds - tempMsg.id + savedMsg.id
+                            else state.transcribedMessageIds,
+                            attachmentsByMessageId = newAttachmentMap
+                        )
+                    }
+                }
+
                 // Streaming assistant message placeholder
                 val assistantId = "asst-${System.currentTimeMillis()}"
                 val assistantMsg = MessageDto(
