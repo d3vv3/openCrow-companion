@@ -5,6 +5,7 @@ import kotlinx.coroutines.flow.Flow
 import org.opencrow.app.data.local.entity.AppConfig
 import org.opencrow.app.data.local.entity.CachedConversation
 import org.opencrow.app.data.local.entity.CachedMessage
+import org.opencrow.app.data.local.entity.CachedToolCall
 
 @Dao
 interface ConfigDao {
@@ -54,5 +55,20 @@ interface MessageDao {
     suspend fun upsert(message: CachedMessage)
 
     @Query("DELETE FROM cached_messages WHERE conversationId = :convId")
+    suspend fun deleteByConversation(convId: String)
+}
+
+@Dao
+interface ToolCallDao {
+    @Query("SELECT * FROM cached_tool_calls WHERE conversationId = :convId ORDER BY createdAt ASC")
+    suspend fun getByConversation(convId: String): List<CachedToolCall>
+
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun upsertAll(toolCalls: List<CachedToolCall>)
+
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun upsert(toolCall: CachedToolCall)
+
+    @Query("DELETE FROM cached_tool_calls WHERE conversationId = :convId")
     suspend fun deleteByConversation(convId: String)
 }

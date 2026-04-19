@@ -35,6 +35,10 @@ interface OpenCrowApi {
         @Body body: CreateMessageRequest
     ): Response<MessageDto>
 
+    // ─── Tool Calls ───
+    @GET("v1/conversations/{id}/tool-calls")
+    suspend fun listToolCalls(@Path("id") conversationId: String): Response<ToolCallsResponse>
+
     // ─── Orchestrator ───
     @POST("v1/orchestrator/complete")
     suspend fun complete(@Body body: CompleteRequest): Response<CompleteResponse>

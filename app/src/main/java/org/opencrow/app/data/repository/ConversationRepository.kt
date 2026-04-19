@@ -6,8 +6,10 @@ import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.flow.asSharedFlow
 import org.opencrow.app.data.local.ConversationDao
 import org.opencrow.app.data.local.MessageDao
+import org.opencrow.app.data.local.ToolCallDao
 import org.opencrow.app.data.mapper.toCached
 import org.opencrow.app.data.mapper.toDto
+import org.opencrow.app.data.mapper.toRecordDto
 import org.opencrow.app.data.remote.ApiClient
 import org.opencrow.app.data.remote.StreamEvent
 import org.opencrow.app.data.remote.StreamingClient
@@ -16,7 +18,8 @@ import org.opencrow.app.data.remote.dto.*
 class ConversationRepository(
     private val apiClient: ApiClient,
     private val conversationDao: ConversationDao,
-    private val messageDao: MessageDao
+    private val messageDao: MessageDao,
+    private val toolCallDao: ToolCallDao
 ) {
     companion object {
         private const val TAG = "ConversationRepo"
@@ -99,6 +102,27 @@ class ConversationRepository(
 
     suspend fun cacheMessage(message: MessageDto) {
         messageDao.upsert(message.toCached())
+    }
+
+    suspend fun loadToolCalls(conversationId: String): Pair<List<ToolCallRecordDto>, List<ToolCallRecordDto>?> {
+        val cached = toolCallDao.getByConversation(conversationId).map { it.toRecordDto() }
+        val fresh = try {
+            val resp = apiClient.api.listToolCalls(conversationId)
+            if (resp.isSuccessful) {
+                val list = resp.body()?.toolCalls.orEmpty()
+                toolCallDao.deleteByConversation(conversationId)
+                toolCallDao.upsertAll(list.map { it.toCached(conversationId) })
+                list
+            } else null
+        } catch (e: Exception) {
+            Log.e(TAG, "Failed to load tool calls", e)
+            null
+        }
+        return cached to fresh
+    }
+
+    suspend fun cacheToolCalls(conversationId: String, toolCalls: List<ToolCallRecordDto>) {
+        toolCallDao.upsertAll(toolCalls.map { it.toCached(conversationId) })
     }
 
     suspend fun updateCachedConversation(conversation: ConversationDto) {

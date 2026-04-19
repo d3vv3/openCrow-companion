@@ -65,5 +65,18 @@ data class TokenUsageDto(
     val totalTokens: Int
 )
 
+// ─── Tool Calls ───
+data class ToolCallsResponse(val toolCalls: List<ToolCallRecordDto>?)
+data class ToolCallRecordDto(
+    val id: String,
+    val toolName: String,
+    val kind: String?,
+    val arguments: Map<String, Any>?,
+    val output: String?,
+    val error: String?,
+    val durationMs: Long?,
+    val createdAt: String
+)
+
 // ─── Transcription ───
 data class TranscribeResponse(val transcript: String)

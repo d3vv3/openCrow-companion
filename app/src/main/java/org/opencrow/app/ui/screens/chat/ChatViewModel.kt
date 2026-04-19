@@ -19,6 +19,7 @@ import org.opencrow.app.data.remote.StreamEvent
 import org.opencrow.app.data.remote.dto.ConversationDto
 import org.opencrow.app.data.remote.dto.MessageDto
 import org.opencrow.app.data.remote.dto.ToolCallDto
+import org.opencrow.app.data.remote.dto.ToolCallRecordDto
 import org.opencrow.app.data.repository.ConversationRepository
 import java.io.File
 import java.text.SimpleDateFormat
@@ -114,7 +115,47 @@ class ChatViewModel(
             } else {
                 _uiState.update { it.copy(loadingMessages = false) }
             }
+
+            // Load tool calls and associate with assistant messages
+            val messages = _uiState.value.messages
+            val (cachedCalls, freshCalls) = repository.loadToolCalls(conversationId)
+            val toolCalls = freshCalls ?: cachedCalls
+            if (toolCalls.isNotEmpty()) {
+                _uiState.update { it.copy(toolCallsByMessageId = associateToolCalls(messages, toolCalls)) }
+            }
         }
+    }
+
+    /**
+     * Associates tool calls with the assistant message they belong to.
+     * Tool calls that occurred between a user message and the next assistant message
+     * are grouped under that assistant message's ID.
+     */
+    private fun associateToolCalls(
+        messages: List<MessageDto>,
+        toolCalls: List<ToolCallRecordDto>
+    ): Map<String, List<ToolCallDto>> {
+        if (toolCalls.isEmpty()) return emptyMap()
+
+        val result = mutableMapOf<String, MutableList<ToolCallDto>>()
+        val assistantMessages = messages.filter { it.role == "assistant" }
+
+        for (tc in toolCalls) {
+            // Find the first assistant message whose createdAt >= tool call's createdAt
+            val owner = assistantMessages.firstOrNull { it.createdAt >= tc.createdAt }
+                ?: assistantMessages.lastOrNull()
+            if (owner != null) {
+                result.getOrPut(owner.id) { mutableListOf() }.add(
+                    ToolCallDto(
+                        name = tc.toolName,
+                        arguments = tc.arguments,
+                        status = if (tc.error != null) "error" else "success",
+                        output = tc.error ?: tc.output
+                    )
+                )
+            }
+        }
+        return result
     }
 
     fun refreshMessages() {
@@ -126,6 +167,13 @@ class ChatViewModel(
                 _uiState.update { it.copy(messages = fresh, refreshingMessages = false) }
             } else {
                 _uiState.update { it.copy(refreshingMessages = false) }
+            }
+
+            // Reload tool calls
+            val messages = _uiState.value.messages
+            val (_, freshCalls) = repository.loadToolCalls(convId)
+            if (freshCalls != null) {
+                _uiState.update { it.copy(toolCallsByMessageId = associateToolCalls(messages, freshCalls)) }
             }
         }
     }
@@ -286,10 +334,26 @@ class ChatViewModel(
                     }
                 }
 
-                // Cache final messages
+                // Cache final messages and tool calls
                 repository.cacheMessage(tempMsg)
                 _uiState.value.messages.find { it.id == assistantId }?.let {
                     repository.cacheMessage(it)
+                }
+                if (streamToolCalls.isNotEmpty()) {
+                    val now2 = SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ss.SSS'Z'", Locale.US).format(Date())
+                    val recordDtos = streamToolCalls.mapIndexed { index, tc ->
+                        ToolCallRecordDto(
+                            id = "tc-${System.currentTimeMillis()}-$index",
+                            toolName = tc.name,
+                            kind = null,
+                            arguments = tc.arguments,
+                            output = tc.output,
+                            error = if (tc.status == "error") tc.output else null,
+                            durationMs = null,
+                            createdAt = now2
+                        )
+                    }
+                    repository.cacheToolCalls(convId, recordDtos)
                 }
                 _uiState.value.conversations.find { it.id == convId }?.let {
                     repository.updateCachedConversation(it)

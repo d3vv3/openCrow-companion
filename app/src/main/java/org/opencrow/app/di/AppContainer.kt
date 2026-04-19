@@ -11,7 +11,7 @@ class AppContainer(context: Context) {
     val apiClient: ApiClient = ApiClient(database.configDao())
 
     val conversationRepository: ConversationRepository by lazy {
-        ConversationRepository(apiClient, database.conversationDao(), database.messageDao())
+        ConversationRepository(apiClient, database.conversationDao(), database.messageDao(), database.toolCallDao())
     }
 
     val configRepository: ConfigRepository by lazy {

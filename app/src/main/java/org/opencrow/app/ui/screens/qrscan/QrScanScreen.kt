@@ -99,7 +99,10 @@ fun QrScanScreen(onPaired: () -> Unit) {
                         .padding(spacing.md),
                     contentAlignment = Alignment.Center
                 ) {
-                    QrCameraPreview(onQrDetected = viewModel::handleQrScanned)
+                    QrCameraPreview(
+                        scanning = !state.pairing && !state.paired,
+                        onQrDetected = viewModel::handleQrScanned
+                    )
                     if (state.pairing) {
                         Surface(
                             color = MaterialTheme.colorScheme.surface.copy(alpha = 0.8f),
@@ -132,10 +135,10 @@ fun QrScanScreen(onPaired: () -> Unit) {
 
 @Composable
 @androidx.annotation.OptIn(androidx.camera.core.ExperimentalGetImage::class)
-fun QrCameraPreview(onQrDetected: (String) -> Unit) {
+fun QrCameraPreview(scanning: Boolean, onQrDetected: (String) -> Unit) {
     val context = LocalContext.current
     val lifecycleOwner = LocalLifecycleOwner.current
-    var detected by remember { mutableStateOf(false) }
+    val scanningState = rememberUpdatedState(scanning)
 
     val reader = remember {
         MultiFormatReader().apply {
@@ -157,10 +160,9 @@ fun QrCameraPreview(onQrDetected: (String) -> Unit) {
                     .build()
                     .also { imageAnalysis ->
                         imageAnalysis.setAnalyzer(ContextCompat.getMainExecutor(ctx)) { imageProxy ->
-                            if (!detected) {
+                            if (scanningState.value) {
                                 val result = decodeQr(imageProxy, reader)
                                 if (result != null) {
-                                    detected = true
                                     onQrDetected(result)
                                 }
                             }

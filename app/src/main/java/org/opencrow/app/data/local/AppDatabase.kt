@@ -7,16 +7,18 @@ import androidx.room.RoomDatabase
 import org.opencrow.app.data.local.entity.AppConfig
 import org.opencrow.app.data.local.entity.CachedConversation
 import org.opencrow.app.data.local.entity.CachedMessage
+import org.opencrow.app.data.local.entity.CachedToolCall
 
 @Database(
-    entities = [AppConfig::class, CachedConversation::class, CachedMessage::class],
-    version = 1,
+    entities = [AppConfig::class, CachedConversation::class, CachedMessage::class, CachedToolCall::class],
+    version = 2,
     exportSchema = false
 )
 abstract class AppDatabase : RoomDatabase() {
     abstract fun configDao(): ConfigDao
     abstract fun conversationDao(): ConversationDao
     abstract fun messageDao(): MessageDao
+    abstract fun toolCallDao(): ToolCallDao
 
     companion object {
         @Volatile private var INSTANCE: AppDatabase? = null
