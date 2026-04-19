@@ -7,6 +7,7 @@ import androidx.compose.foundation.text.ClickableText
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.remember
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
@@ -35,8 +36,8 @@ fun MarkdownText(
     val codeBackground = MaterialTheme.colorScheme.surfaceContainerHighest
     val linkColor = MaterialTheme.colorScheme.primary
 
-    // Split into code blocks vs inline segments
-    val segments = splitCodeBlocks(text)
+    // Split into code blocks vs inline segments (memoized)
+    val segments = remember(text) { splitCodeBlocks(text) }
 
     Column(modifier = modifier, verticalArrangement = Arrangement.spacedBy(4.dp)) {
         for (segment in segments) {
@@ -66,12 +67,14 @@ fun MarkdownText(
                         Spacer(Modifier.height(4.dp))
                         continue
                     }
-                    val (annotated, urlMap) = parseInlineMarkdown(
-                        line = line,
-                        baseStyle = style.copy(color = color),
-                        linkColor = linkColor,
-                        codeBackground = codeBackground
-                    )
+                    val (annotated, urlMap) = remember(line, color, linkColor, codeBackground) {
+                        parseInlineMarkdown(
+                            line = line,
+                            baseStyle = style.copy(color = color),
+                            linkColor = linkColor,
+                            codeBackground = codeBackground
+                        )
+                    }
                     if (urlMap.isNotEmpty()) {
                         ClickableText(
                             text = annotated,

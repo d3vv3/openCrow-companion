@@ -42,17 +42,32 @@ fun ChatScreen(
     val spacing = LocalSpacing.current
     val listState = rememberLazyListState()
 
-    // Auto-scroll on new messages or streaming updates
-    LaunchedEffect(state.messages.size, state.sending, state.messages.lastOrNull()?.content?.length) {
+    // Auto-scroll on new messages (not on every streaming token)
+    val messageCount = state.messages.size
+    LaunchedEffect(messageCount, state.sending) {
         if (state.messages.isNotEmpty()) {
-            listState.animateScrollToItem(state.messages.size - 1)
+            listState.animateScrollToItem(messageCount - 1)
         }
     }
+    // Scroll to bottom during streaming, but only when content grows significantly
+    val lastMessageLength = state.messages.lastOrNull()?.content?.length ?: 0
+    val streamingScrollThreshold = remember { mutableIntStateOf(0) }
+    LaunchedEffect(state.streaming, lastMessageLength) {
+        if (state.streaming && lastMessageLength - streamingScrollThreshold.intValue > 50) {
+            streamingScrollThreshold.intValue = lastMessageLength
+            if (state.messages.isNotEmpty()) {
+                listState.animateScrollToItem(state.messages.size - 1)
+            }
+        }
+        if (!state.streaming) streamingScrollThreshold.intValue = 0
+    }
 
-    val visibleConversations = if (state.showSystemChats) {
-        state.conversations
-    } else {
-        state.conversations.filter { !it.isAutomatic || it.automationKind == "heartbeat" }
+    val visibleConversations = remember(state.conversations, state.showSystemChats) {
+        if (state.showSystemChats) {
+            state.conversations
+        } else {
+            state.conversations.filter { !it.isAutomatic || it.automationKind == "heartbeat" }
+        }
     }
 
     val hasActiveChat = state.activeConversationId != null && state.messages.isNotEmpty()

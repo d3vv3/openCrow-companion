@@ -10,6 +10,7 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.*
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -119,6 +120,15 @@ fun HistorySheet(
                     ) {
                         items(conversations, key = { it.id }) { conv ->
                             val isActive = conv.id == activeId
+                            val displayTitle = remember(conv.title) {
+                                conv.title.ifBlank { "Untitled" }
+                            }
+                            val isTelegram = remember(conv.title) {
+                                conv.title.contains("[telegram]", ignoreCase = true)
+                            }
+                            val formattedDate = remember(conv.updatedAt) {
+                                formatDate(conv.updatedAt)
+                            }
                             Surface(
                                 onClick = { onSelectConversation(conv.id) },
                                 color = if (isActive) MaterialTheme.colorScheme.surfaceContainerHigh
@@ -137,7 +147,7 @@ fun HistorySheet(
                                         horizontalArrangement = Arrangement.spacedBy(spacing.sm)
                                     ) {
                                         Text(
-                                            text = conv.title.ifBlank { "Untitled" },
+                                            text = displayTitle,
                                             style = MaterialTheme.typography.bodyMedium,
                                             color = if (isActive) MaterialTheme.colorScheme.primary
                                             else MaterialTheme.colorScheme.onSurface,
@@ -158,7 +168,7 @@ fun HistorySheet(
                                                 )
                                             }
                                         }
-                                        if (conv.title.contains("[telegram]", ignoreCase = true)) {
+                                        if (isTelegram) {
                                             Surface(
                                                 color = MaterialTheme.colorScheme.tertiaryContainer,
                                                 shape = MaterialTheme.shapes.extraSmall
@@ -173,7 +183,7 @@ fun HistorySheet(
                                         }
                                     }
                                     Text(
-                                        text = formatDate(conv.updatedAt),
+                                        text = formattedDate,
                                         style = MaterialTheme.typography.labelSmall,
                                         color = MaterialTheme.colorScheme.onSurfaceVariant
                                     )
