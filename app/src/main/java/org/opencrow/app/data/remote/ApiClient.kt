@@ -2,7 +2,9 @@ package org.opencrow.app.data.remote
 
 import android.util.Log
 import com.google.gson.GsonBuilder
-import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
 import okhttp3.Interceptor
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.OkHttpClient
@@ -73,7 +75,8 @@ class ApiClient(private val configDao: ConfigDao) {
         }
 
         val logging = HttpLoggingInterceptor().apply {
-            level = HttpLoggingInterceptor.Level.BODY
+            level = if (org.opencrow.app.BuildConfig.DEBUG) HttpLoggingInterceptor.Level.BASIC
+                    else HttpLoggingInterceptor.Level.NONE
         }
 
         val client = OkHttpClient.Builder()
@@ -112,7 +115,7 @@ class ApiClient(private val configDao: ConfigDao) {
                 _accessToken = authResp.tokens.accessToken
                 _refreshToken = authResp.tokens.refreshToken
                 // Persist refreshed tokens to DB so they survive app restarts
-                runBlocking {
+                CoroutineScope(Dispatchers.IO).launch {
                     try {
                         configDao.set(AppConfig("accessToken", authResp.tokens.accessToken))
                         configDao.set(AppConfig("refreshToken", authResp.tokens.refreshToken))

@@ -737,12 +737,13 @@ fun HistorySheet(
     }
 }
 
+private val isoParser = SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ss", Locale.US)
+private val displayFormat = SimpleDateFormat("MMM d, HH:mm", Locale.getDefault())
+
 private fun formatDate(iso: String): String {
     return try {
-        val sdf = SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ss", Locale.getDefault())
-        val date = sdf.parse(iso.take(19))
-        val out = SimpleDateFormat("MMM d, HH:mm", Locale.getDefault())
-        out.format(date!!)
+        val date = isoParser.parse(iso.take(19))
+        displayFormat.format(date!!)
     } catch (_: Exception) {
         iso.take(10)
     }
