@@ -5,13 +5,13 @@ import android.content.ContentResolver
 import android.content.Context
 import android.content.pm.PackageManager
 import android.database.Cursor
-import android.net.Uri
 import android.provider.CalendarContract
 import android.util.Log
 import androidx.core.content.ContextCompat
 import androidx.work.CoroutineWorker
 import androidx.work.WorkerParameters
 import org.opencrow.app.OpenCrowApp
+import org.opencrow.app.data.remote.ApiClient
 import org.opencrow.app.data.remote.dto.*
 import java.text.SimpleDateFormat
 import java.util.*
@@ -27,45 +27,32 @@ class HeartbeatWorker(
 
     override suspend fun doWork(): Result {
         val app = applicationContext as OpenCrowApp
+        val apiClient = app.container.apiClient
         try {
-            app.apiClient.initialize()
-            if (!app.apiClient.isConfigured) return Result.failure()
+            apiClient.initialize()
+            if (!apiClient.isConfigured) return Result.failure()
 
-            val deviceId = app.apiClient.getDeviceId() ?: return Result.failure()
+            val deviceId = apiClient.getDeviceId() ?: return Result.failure()
 
-            // Step 0: Register device to stay online
-            registerDevice(app, deviceId)
+            registerDevice(apiClient, deviceId)
+            val notifications = checkNotifications(apiClient)
 
-            // Step 1: Check for notifications (heartbeat events)
-            val notifications = checkNotifications(app)
-
-            // Step 2: Query local calendar
             val calendarPrompt = queryCalendar()
-
-            // Step 3: Current date and time
             val dateTime = SimpleDateFormat("EEEE, MMMM d, yyyy 'at' HH:mm z", Locale.getDefault())
                 .format(Date())
 
-            // Step 4: Poll device tasks
-            val tasks = pollDeviceTasks(app, deviceId)
+            val tasks = pollDeviceTasks(apiClient, deviceId)
             val taskPrompt = buildTaskPrompt(tasks)
-
-            // Step 5: Compile heartbeat prompt
             val heartbeatMessage = buildHeartbeatPrompt(dateTime, calendarPrompt, taskPrompt)
 
-            // Send to server as system chat
-            val response = sendHeartbeatChat(app, heartbeatMessage)
+            val response = sendHeartbeatChat(apiClient, heartbeatMessage)
 
-            // Step 6: Process response
             if (response != null && response.trim() != "HEARTBEAT_OK") {
                 Log.i(TAG, "Heartbeat action needed: $response")
             }
 
-            // Step 7: Complete tasks
-            completeTasks(app, tasks, response)
-
-            // Persist any refreshed tokens
-            app.apiClient.persistCurrentTokens()
+            completeTasks(apiClient, tasks, response)
+            apiClient.persistCurrentTokens()
 
             return Result.success()
         } catch (e: Exception) {
@@ -74,7 +61,7 @@ class HeartbeatWorker(
         }
     }
 
-    private suspend fun registerDevice(app: OpenCrowApp, deviceId: String) {
+    private suspend fun registerDevice(apiClient: ApiClient, deviceId: String) {
         val capabilities = listOf(
             DeviceCapability("set_alarm", "Set a one-time or recurring alarm"),
             DeviceCapability("create_contact", "Add a contact to the phone's address book"),
@@ -83,15 +70,15 @@ class HeartbeatWorker(
             DeviceCapability("create_calendar_event", "Add an event to the calendar")
         )
         try {
-            app.apiClient.api.registerDevice(deviceId, RegisterDeviceRequest(capabilities))
+            apiClient.api.registerDevice(deviceId, RegisterDeviceRequest(capabilities))
         } catch (e: Exception) {
             Log.w(TAG, "Register failed: ${e.message}")
         }
     }
 
-    private suspend fun checkNotifications(app: OpenCrowApp): List<HeartbeatEventDto> {
+    private suspend fun checkNotifications(apiClient: ApiClient): List<HeartbeatEventDto> {
         return try {
-            val resp = app.apiClient.api.getHeartbeatEvents()
+            val resp = apiClient.api.getHeartbeatEvents()
             resp.body()?.events.orEmpty()
         } catch (_: Exception) {
             emptyList()
@@ -162,9 +149,9 @@ class HeartbeatWorker(
         }
     }
 
-    private suspend fun pollDeviceTasks(app: OpenCrowApp, deviceId: String): List<DeviceTaskDto> {
+    private suspend fun pollDeviceTasks(apiClient: ApiClient, deviceId: String): List<DeviceTaskDto> {
         return try {
-            val resp = app.apiClient.api.getDeviceTasks(deviceId)
+            val resp = apiClient.api.getDeviceTasks(deviceId)
             resp.body()?.tasks.orEmpty().filter { it.status == "processing" || it.status == "pending" }
         } catch (_: Exception) {
             emptyList()
@@ -180,11 +167,7 @@ class HeartbeatWorker(
         }
     }
 
-    private fun buildHeartbeatPrompt(
-        dateTime: String,
-        calendarPrompt: String,
-        taskPrompt: String
-    ): String {
+    private fun buildHeartbeatPrompt(dateTime: String, calendarPrompt: String, taskPrompt: String): String {
         return """[HEARTBEAT] This is an automatic self-check. Right now is $dateTime
 
 $calendarPrompt
@@ -200,34 +183,26 @@ HEARTBEAT_OK
 If anything needs attention, respond concisely with what changed and what action is recommended."""
     }
 
-    private suspend fun sendHeartbeatChat(app: OpenCrowApp, message: String): String? {
+    private suspend fun sendHeartbeatChat(apiClient: ApiClient, message: String): String? {
         return try {
-            // Create a system conversation for heartbeat
-            val convResp = app.apiClient.api.createConversation(
+            val convResp = apiClient.api.createConversation(
                 CreateConversationRequest("[Heartbeat] ${SimpleDateFormat("yyyy-MM-dd HH:mm", Locale.getDefault()).format(Date())}")
             )
             if (!convResp.isSuccessful) return null
             val convId = convResp.body()!!.id
 
-            // Send heartbeat message via orchestrator
-            val completeResp = app.apiClient.api.complete(
-                CompleteRequest(convId, message)
-            )
-            if (completeResp.isSuccessful) {
-                completeResp.body()?.output
-            } else null
+            val completeResp = apiClient.api.complete(CompleteRequest(convId, message))
+            if (completeResp.isSuccessful) completeResp.body()?.output else null
         } catch (e: Exception) {
             Log.e(TAG, "Heartbeat chat failed", e)
             null
         }
     }
 
-    private suspend fun completeTasks(app: OpenCrowApp, tasks: List<DeviceTaskDto>, response: String?) {
+    private suspend fun completeTasks(apiClient: ApiClient, tasks: List<DeviceTaskDto>, response: String?) {
         for (task in tasks) {
             try {
-                // For now, mark tasks as completed with the heartbeat response
-                val success = response != null && response.trim() != "HEARTBEAT_OK"
-                app.apiClient.api.completeDeviceTask(
+                apiClient.api.completeDeviceTask(
                     task.id,
                     CompleteDeviceTaskRequest(
                         success = true,
@@ -235,14 +210,10 @@ If anything needs attention, respond concisely with what changed and what action
                     )
                 )
             } catch (e: Exception) {
-                // Mark as failed
                 try {
-                    app.apiClient.api.completeDeviceTask(
+                    apiClient.api.completeDeviceTask(
                         task.id,
-                        CompleteDeviceTaskRequest(
-                            success = false,
-                            output = "Failed: ${e.message}"
-                        )
+                        CompleteDeviceTaskRequest(success = false, output = "Failed: ${e.message}")
                     )
                 } catch (_: Exception) {}
             }

@@ -1,7 +1,6 @@
-package org.opencrow.app.ui.screens
+package org.opencrow.app.ui.screens.qrscan
 
 import android.Manifest
-import android.graphics.ImageFormat
 import android.util.Log
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
@@ -22,14 +21,10 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.core.content.ContextCompat
-import com.google.gson.Gson
+import androidx.lifecycle.viewmodel.compose.viewModel
 import com.google.zxing.*
 import com.google.zxing.common.HybridBinarizer
-import kotlinx.coroutines.launch
 import org.opencrow.app.OpenCrowApp
-import org.opencrow.app.data.remote.dto.DeviceCapability
-import org.opencrow.app.data.remote.dto.QrPayload
-import org.opencrow.app.data.remote.dto.RegisterDeviceRequest
 import org.opencrow.app.ui.theme.LocalSpacing
 import java.nio.ByteBuffer
 
@@ -37,19 +32,16 @@ import java.nio.ByteBuffer
 fun QrScanScreen(onPaired: () -> Unit) {
     val context = LocalContext.current
     val app = context.applicationContext as OpenCrowApp
-    val scope = rememberCoroutineScope()
+    val viewModel: QrScanViewModel = viewModel(
+        factory = QrScanViewModel.Factory(app.container.apiClient)
+    )
+    val state by viewModel.uiState.collectAsState()
     val spacing = LocalSpacing.current
-
-    var hasCameraPermission by remember { mutableStateOf(false) }
-    var permissionsRequested by remember { mutableStateOf(false) }
-    var error by remember { mutableStateOf<String?>(null) }
-    var pairing by remember { mutableStateOf(false) }
 
     val permissionLauncher = rememberLauncherForActivityResult(
         ActivityResultContracts.RequestMultiplePermissions()
     ) { permissions ->
-        hasCameraPermission = permissions[Manifest.permission.CAMERA] == true
-        permissionsRequested = true
+        viewModel.onPermissionsResult(permissions[Manifest.permission.CAMERA] == true)
     }
 
     LaunchedEffect(Unit) {
@@ -62,83 +54,9 @@ fun QrScanScreen(onPaired: () -> Unit) {
         )
     }
 
-    fun handleQrScanned(raw: String) {
-        if (pairing) return
-        pairing = true
-        error = null
-        scope.launch {
-            try {
-                val payload = Gson().fromJson(raw, QrPayload::class.java)
-                if (payload.id.isNullOrBlank() || payload.server.isNullOrBlank() ||
-                    payload.accessToken.isNullOrBlank() || payload.refreshToken.isNullOrBlank()
-                ) {
-                    error = "Invalid QR code format"
-                    pairing = false
-                    return@launch
-                }
-
-                Log.d("QrScan", "QR payload: server=${payload.server}, id=${payload.id}")
-
-                app.apiClient.configure(payload.server, payload.accessToken, payload.refreshToken)
-                app.apiClient.saveTokens(
-                    payload.server, payload.accessToken, payload.refreshToken, payload.id
-                )
-
-                // Step 1: Check server is reachable (no auth needed)
-                val healthResp = try {
-                    app.apiClient.api.health()
-                } catch (e: Exception) {
-                    Log.e("QrScan", "Health check failed: ${e.message}", e)
-                    error = "Cannot reach server at ${payload.server}: ${e.message}"
-                    pairing = false
-                    return@launch
-                }
-                if (!healthResp.isSuccessful) {
-                    Log.e("QrScan", "Health check returned ${healthResp.code()}")
-                    error = "Server at ${payload.server} returned ${healthResp.code()} on health check"
-                    pairing = false
-                    return@launch
-                }
-
-                // Step 2: Validate auth tokens work
-                val authResp = try {
-                    app.apiClient.api.listConversations()
-                } catch (e: Exception) {
-                    Log.e("QrScan", "Auth validation failed: ${e.message}", e)
-                    error = "Server reachable but auth failed: ${e.message}"
-                    pairing = false
-                    return@launch
-                }
-                if (!authResp.isSuccessful) {
-                    Log.e("QrScan", "Auth validation returned ${authResp.code()}: ${authResp.errorBody()?.string()}")
-                    error = "Server reachable but auth failed (${authResp.code()})"
-                    pairing = false
-                    return@launch
-                }
-
-                // Register device capabilities (best-effort, don't block pairing)
-                val capabilities = listOf(
-                    DeviceCapability("set_alarm", "Set a one-time or recurring alarm"),
-                    DeviceCapability("create_contact", "Add a contact to the phone's address book"),
-                    DeviceCapability("make_call", "Initiate a phone call to a number"),
-                    DeviceCapability("send_sms", "Send an SMS to a number"),
-                    DeviceCapability("create_calendar_event", "Add an event to the calendar")
-                )
-                try {
-                    app.apiClient.api.registerDevice(
-                        payload.id, RegisterDeviceRequest(capabilities)
-                    )
-                } catch (e: Exception) {
-                    Log.w("QrScan", "Device register failed (non-fatal): ${e.message}")
-                }
-
-                onPaired()
-            } catch (e: Exception) {
-                Log.e("QrScan", "Pairing failed", e)
-                error = "Pairing failed: ${e.message}"
-                pairing = false
-            }
-        }
+    // Navigate when paired
+    LaunchedEffect(state.paired) {
+        if (state.paired) onPaired()
     }
 
     Scaffold(containerColor = MaterialTheme.colorScheme.background) { padding ->
@@ -164,9 +82,9 @@ fun QrScanScreen(onPaired: () -> Unit) {
             )
             Spacer(Modifier.height(spacing.xl))
 
-            if (!permissionsRequested) {
+            if (!state.permissionsRequested) {
                 CircularProgressIndicator(color = MaterialTheme.colorScheme.primary)
-            } else if (!hasCameraPermission) {
+            } else if (!state.hasCameraPermission) {
                 Text(
                     text = "Camera permission is required to scan the QR code.",
                     style = MaterialTheme.typography.bodyMedium,
@@ -181,8 +99,8 @@ fun QrScanScreen(onPaired: () -> Unit) {
                         .padding(spacing.md),
                     contentAlignment = Alignment.Center
                 ) {
-                    QrCameraPreview(onQrDetected = { handleQrScanned(it) })
-                    if (pairing) {
+                    QrCameraPreview(onQrDetected = viewModel::handleQrScanned)
+                    if (state.pairing) {
                         Surface(
                             color = MaterialTheme.colorScheme.surface.copy(alpha = 0.8f),
                             modifier = Modifier.fillMaxSize()
@@ -199,7 +117,7 @@ fun QrScanScreen(onPaired: () -> Unit) {
                 }
             }
 
-            error?.let {
+            state.error?.let {
                 Spacer(Modifier.height(spacing.md))
                 Text(
                     text = it,
@@ -275,13 +193,8 @@ private fun decodeQr(image: ImageProxy, reader: MultiFormatReader): String? {
     buffer.get(bytes)
 
     val source = PlanarYUVLuminanceSource(
-        bytes,
-        image.width,
-        image.height,
-        0, 0,
-        image.width,
-        image.height,
-        false
+        bytes, image.width, image.height,
+        0, 0, image.width, image.height, false
     )
     val bitmap = BinaryBitmap(HybridBinarizer(source))
     return try {

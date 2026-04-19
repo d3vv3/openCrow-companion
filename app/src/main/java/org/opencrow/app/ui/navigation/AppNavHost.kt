@@ -11,9 +11,9 @@ import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
 import androidx.navigation.compose.rememberNavController
 import org.opencrow.app.OpenCrowApp
-import org.opencrow.app.ui.screens.ChatScreen
-import org.opencrow.app.ui.screens.QrScanScreen
-import org.opencrow.app.ui.screens.SettingsScreen
+import org.opencrow.app.ui.screens.chat.ChatScreen
+import org.opencrow.app.ui.screens.qrscan.QrScanScreen
+import org.opencrow.app.ui.screens.settings.SettingsScreen
 
 object Routes {
     const val QR_SCAN = "qr_scan"
@@ -29,21 +29,20 @@ fun AppNavHost() {
     var startDest by remember { mutableStateOf<String?>(null) }
 
     LaunchedEffect(Unit) {
-        app.apiClient.initialize()
+        app.container.apiClient.initialize()
 
-        if (!app.apiClient.isConfigured) {
+        if (!app.container.apiClient.isConfigured) {
             startDest = Routes.QR_SCAN
             return@LaunchedEffect
         }
 
-        // Validate the stored credentials actually work
         val valid = try {
-            val healthResp = app.apiClient.api.health()
+            val healthResp = app.container.apiClient.api.health()
             if (!healthResp.isSuccessful) {
                 Log.w("AppNavHost", "Health check failed: ${healthResp.code()}")
                 false
             } else {
-                val authResp = app.apiClient.api.listConversations()
+                val authResp = app.container.apiClient.api.listConversations()
                 authResp.isSuccessful
             }
         } catch (e: Exception) {
@@ -54,7 +53,7 @@ fun AppNavHost() {
         startDest = if (valid) Routes.CHAT else Routes.QR_SCAN
     }
 
-    if (startDest == null) return // loading
+    if (startDest == null) return
 
     NavHost(
         navController = navController,

@@ -1,18 +1,14 @@
 package org.opencrow.app
 
 import android.app.Application
-import org.opencrow.app.data.local.AppDatabase
-import org.opencrow.app.data.remote.ApiClient
+import org.opencrow.app.di.AppContainer
 
 class OpenCrowApp : Application() {
-    lateinit var database: AppDatabase
-        private set
-    lateinit var apiClient: ApiClient
+    lateinit var container: AppContainer
         private set
 
     override fun onCreate() {
         super.onCreate()
-        database = AppDatabase.getInstance(this)
-        apiClient = ApiClient(database.configDao())
+        container = AppContainer(this)
     }
 }
