@@ -1,0 +1,20 @@
+<?xml version="1.0" encoding="utf-8"?>
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="300"
+    android:viewportHeight="300">
+    <!-- Crow silhouette from the openCrow web UI SVG, scaled to adaptive icon safe zone -->
+    <group
+        android:translateX="30"
+        android:translateY="30"
+        android:scaleX="0.8"
+        android:scaleY="0.8">
+        <path
+            android:fillColor="#FFFFFF"
+            android:pathData="M150,0 A150,150 0,0,0 0,150 a150,150 0,0,0 0,0.04 v150 h150 0.85 v-0.002 A150,150 0,0,0 300,150 A150,150 0,0,0 150,0 Z" />
+        <path
+            android:fillColor="#7C3AED"
+            android:pathData="M139.91,43 C105.99,44.63 83.37,66.62 74.28,89.92 65.35,112.82 52.78,138.79 41.05,156.38 29.32,173.97 0,191.57 0,191.57 L0,300 c0,0 90.85,0 150.85,0 68.98,-53.34 49.38,-129.38 49.38,-129.38 0,0 -8.14,-25.05 8.94,-38.54 6.23,-4.92 47.47,-19.83 67.3,-13.12 -9.77,-41.05 -65.07,-40.21 -74,-46.64 -7.26,-10.61 -27.65,-31 -62.55,-29.32 z m21.64,36.35 c5.28,0 9.56,4.28 9.56,9.56 0,5.28 -4.28,9.56 -9.56,9.56 -5.28,0 -9.56,-4.28 -9.56,-9.56 0,-5.28 4.28,-9.56 9.56,-9.56 z" />
+    </group>
+</vector>
