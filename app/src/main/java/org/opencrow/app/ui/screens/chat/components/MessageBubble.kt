@@ -1,6 +1,12 @@
 package org.opencrow.app.ui.screens.chat.components
 
+import android.content.ClipData
+import android.content.ClipboardManager
+import android.content.Context
+import android.widget.Toast
+import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
+import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
@@ -10,16 +16,22 @@ import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.hapticfeedback.HapticFeedbackType
+import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.unit.dp
 import org.opencrow.app.data.remote.dto.MessageDto
 import org.opencrow.app.ui.components.MarkdownText
 import org.opencrow.app.ui.theme.LocalSpacing
 
+@OptIn(ExperimentalFoundationApi::class)
 @Composable
 fun MessageBubble(message: MessageDto, isTranscribed: Boolean = false) {
     val isUser = message.role == "user"
     val isSystem = message.role == "system"
     val spacing = LocalSpacing.current
+    val context = LocalContext.current
+    val haptic = LocalHapticFeedback.current
 
     Row(
         modifier = Modifier.fillMaxWidth(),
@@ -42,7 +54,17 @@ fun MessageBubble(message: MessageDto, isTranscribed: Boolean = false) {
                 else -> MaterialTheme.colorScheme.surfaceContainerHigh
             },
             shape = MaterialTheme.shapes.medium,
-            modifier = Modifier.widthIn(max = 300.dp)
+            modifier = Modifier
+                .widthIn(max = 300.dp)
+                .combinedClickable(
+                    onClick = {},
+                    onLongClick = {
+                        haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                        val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
+                        clipboard.setPrimaryClip(ClipData.newPlainText("message", message.content))
+                        Toast.makeText(context, "Copied to clipboard", Toast.LENGTH_SHORT).show()
+                    }
+                )
         ) {
             Column(modifier = Modifier.padding(12.dp)) {
                 if (isSystem) {

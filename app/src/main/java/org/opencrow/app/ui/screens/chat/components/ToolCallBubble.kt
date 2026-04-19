@@ -1,8 +1,13 @@
 package org.opencrow.app.ui.screens.chat.components
 
+import android.content.ClipData
+import android.content.ClipboardManager
+import android.content.Context
+import android.widget.Toast
 import androidx.compose.animation.animateContentSize
+import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
-import androidx.compose.foundation.clickable
+import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
@@ -16,6 +21,9 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.hapticfeedback.HapticFeedbackType
+import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -23,10 +31,13 @@ import androidx.compose.ui.unit.sp
 import org.opencrow.app.data.remote.dto.ToolCallDto
 import org.opencrow.app.ui.theme.LocalSpacing
 
+@OptIn(ExperimentalFoundationApi::class)
 @Composable
 fun ToolCallBubble(toolCalls: List<ToolCallDto>) {
     val spacing = LocalSpacing.current
     var expanded by remember { mutableStateOf(false) }
+    val context = LocalContext.current
+    val haptic = LocalHapticFeedback.current
 
     Row(
         modifier = Modifier.fillMaxWidth(),
@@ -44,18 +55,35 @@ fun ToolCallBubble(toolCalls: List<ToolCallDto>) {
         Surface(
             color = MaterialTheme.colorScheme.surfaceContainerLow,
             shape = MaterialTheme.shapes.medium,
-            modifier = Modifier.widthIn(max = 300.dp)
+            modifier = Modifier
+                .widthIn(max = 300.dp)
+                .combinedClickable(
+                    onClick = { expanded = !expanded },
+                    onLongClick = {
+                        haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                        val text = toolCalls.joinToString("\n\n") { call ->
+                            buildString {
+                                append("[${call.status}] ${call.name}")
+                                call.arguments?.let { args ->
+                                    append("\n  args: ${args.entries.joinToString(", ") { (k, v) -> "$k: $v" }}")
+                                }
+                                call.output?.let { append("\n  output: $it") }
+                            }
+                        }
+                        val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
+                        clipboard.setPrimaryClip(ClipData.newPlainText("tool_calls", text))
+                        Toast.makeText(context, "Copied to clipboard", Toast.LENGTH_SHORT).show()
+                    }
+                )
         ) {
             Column(
                 modifier = Modifier
                     .animateContentSize()
                     .padding(10.dp)
             ) {
-                // Header row - clickable to expand/collapse
+                // Header row
                 Row(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .clickable { expanded = !expanded },
+                    modifier = Modifier.fillMaxWidth(),
                     verticalAlignment = Alignment.CenterVertically,
                     horizontalArrangement = Arrangement.spacedBy(6.dp)
                 ) {
