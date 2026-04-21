@@ -34,8 +34,27 @@ data class Attachment(
     val uri: Uri,
     val name: String,
     val mimeType: String?,
-    val isImage: Boolean = mimeType?.startsWith("image/") == true
-)
+    val isImage: Boolean = mimeType?.startsWith("image/") == true,
+    /** Decoded image bytes for data: URIs (Coil cannot load data: URIs directly). */
+    val bytes: ByteArray? = null
+) {
+    override fun equals(other: Any?): Boolean {
+        if (this === other) return true
+        if (other !is Attachment) return false
+        return id == other.id && uri == other.uri && name == other.name &&
+                mimeType == other.mimeType && isImage == other.isImage &&
+                bytes.contentEquals(other.bytes ?: ByteArray(0))
+    }
+    override fun hashCode(): Int {
+        var result = id.hashCode()
+        result = 31 * result + uri.hashCode()
+        result = 31 * result + name.hashCode()
+        result = 31 * result + (mimeType?.hashCode() ?: 0)
+        result = 31 * result + isImage.hashCode()
+        result = 31 * result + (bytes?.contentHashCode() ?: 0)
+        return result
+    }
+}
 
 data class ChatUiState(
     val conversations: List<ConversationDto> = emptyList(),
@@ -81,6 +100,47 @@ class ChatViewModel(
     init {
         loadConversations()
         observeRefreshSignal()
+        observeActiveStream()
+    }
+
+    private fun observeActiveStream() {
+        val app = appContext as? org.opencrow.app.OpenCrowApp ?: return
+        viewModelScope.launch {
+            app.container.activeStream.collect { streamState ->
+                val convId = _uiState.value.activeConversationId ?: return@collect
+                if (streamState == null || streamState.conversationId != convId) return@collect
+
+                val msgId = streamState.messageId
+                val existing = _uiState.value.messages.find { it.id == msgId }
+                if (existing != null) {
+                    // Update content of existing placeholder
+                    _uiState.update { state ->
+                        state.copy(
+                            streaming = streamState.isStreaming,
+                            messages = state.messages.map { msg ->
+                                if (msg.id == msgId) msg.copy(content = streamState.content) else msg
+                            }
+                        )
+                    }
+                } else if (streamState.isStreaming) {
+                    // Add new placeholder (ChatViewModel opened the conversation after streaming started)
+                    val now = java.text.SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ss.SSS'Z'", java.util.Locale.US).format(java.util.Date())
+                    val placeholder = org.opencrow.app.data.remote.dto.MessageDto(
+                        id = msgId,
+                        conversationId = convId,
+                        role = "assistant",
+                        content = streamState.content,
+                        createdAt = now
+                    )
+                    _uiState.update { state ->
+                        state.copy(
+                            streaming = true,
+                            messages = state.messages + placeholder
+                        )
+                    }
+                }
+            }
+        }
     }
 
     private fun observeRefreshSignal() {
@@ -128,14 +188,40 @@ class ChatViewModel(
         viewModelScope.launch {
             val (cached, fresh) = repository.loadMessages(conversationId)
             if (cached.isNotEmpty()) {
-                _uiState.update { it.copy(messages = cached, loadingMessages = false) }
+                val processedCached = processMessages(cached)
+                _uiState.update { it.copy(messages = processedCached, loadingMessages = false) }
             } else {
                 _uiState.update { it.copy(loadingMessages = true) }
             }
             if (fresh != null) {
-                _uiState.update { it.copy(messages = fresh, loadingMessages = false) }
+                val processedFresh = processMessages(fresh)
+                _uiState.update { it.copy(messages = processedFresh, loadingMessages = false) }
             } else {
                 _uiState.update { it.copy(loadingMessages = false) }
+            }
+
+            // Re-inject active stream placeholder if AssistViewModel is mid-stream for this conversation
+            val app = appContext as? org.opencrow.app.OpenCrowApp
+            val streamState = app?.container?.activeStream?.value
+            if (streamState != null && streamState.conversationId == conversationId) {
+                val msgId = streamState.messageId
+                val alreadyPresent = _uiState.value.messages.any { it.id == msgId }
+                if (!alreadyPresent) {
+                    val now = java.text.SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ss.SSS'Z'", java.util.Locale.US).format(java.util.Date())
+                    val placeholder = MessageDto(
+                        id = msgId,
+                        conversationId = conversationId,
+                        role = "assistant",
+                        content = streamState.content,
+                        createdAt = now
+                    )
+                    _uiState.update { state ->
+                        state.copy(
+                            streaming = streamState.isStreaming,
+                            messages = state.messages + placeholder
+                        )
+                    }
+                }
             }
 
             // Load tool calls and associate with assistant messages
@@ -146,6 +232,64 @@ class ChatViewModel(
                 _uiState.update { it.copy(toolCallsByMessageId = associateToolCalls(messages, toolCalls)) }
             }
         }
+    }
+
+    /**
+     * Extracts attachments from markdown content and populates attachmentsByMessageId.
+     * Returns a list of messages with cleaned content.
+     */
+    private fun processMessages(messages: List<MessageDto>): List<MessageDto> {
+        val attachmentsMap = mutableMapOf<String, List<Attachment>>()
+        val processed = messages.map { msg ->
+            if (msg.role == "user") {
+                val (cleanedContent, attachments) = extractAttachmentsFromMarkdown(msg.content)
+                if (attachments.isNotEmpty()) {
+                    attachmentsMap[msg.id] = attachments
+                }
+                msg.copy(content = cleanedContent)
+            } else {
+                msg
+            }
+        }
+        if (attachmentsMap.isNotEmpty()) {
+            _uiState.update { it.copy(attachmentsByMessageId = it.attachmentsByMessageId + attachmentsMap) }
+        }
+        return processed
+    }
+
+    private fun extractAttachmentsFromMarkdown(content: String): Pair<String, List<Attachment>> {
+        val attachments = mutableListOf<Attachment>()
+        // Match ![name](data:image/...)
+        val imagePattern = Regex("!\\[(.*?)\\]\\((data:image/[^;]+;base64,[^\\)]+)\\)")
+        // Match [Attached file: name]
+        val filePattern = Regex("\\[Attached file: (.*?)\\]")
+        
+        var cleanedContent = content
+        
+        imagePattern.findAll(content).forEach { match ->
+            val name = match.groupValues[1]
+            val dataUri = match.groupValues[2]
+            val mimeType = dataUri.substringAfter("data:").substringBefore(";")
+            // Decode base64 bytes so Coil can render them (Coil does not support data: URIs)
+            val bytes = try {
+                val base64Part = dataUri.substringAfter("base64,")
+                Base64.decode(base64Part, Base64.DEFAULT)
+            } catch (_: Exception) { null }
+            attachments.add(Attachment(
+                uri = Uri.parse(dataUri),
+                name = name,
+                mimeType = mimeType,
+                bytes = bytes
+            ))
+            cleanedContent = cleanedContent.replace(match.value, "")
+        }
+        
+        filePattern.findAll(cleanedContent).forEach { match ->
+            // We keep file attachments as placeholders in the text if they were sent that way
+            // or we could extract them too. Currently MessageBubble handles them via 'attachments'
+        }
+        
+        return cleanedContent.trim() to attachments
     }
 
     /**
@@ -193,7 +337,8 @@ class ChatViewModel(
         viewModelScope.launch {
             val (_, fresh) = repository.loadMessages(convId)
             if (fresh != null) {
-                _uiState.update { it.copy(messages = fresh, refreshingMessages = false) }
+                val processedFresh = processMessages(fresh)
+                _uiState.update { it.copy(messages = processedFresh, refreshingMessages = false) }
             } else {
                 _uiState.update { it.copy(refreshingMessages = false) }
             }
@@ -232,6 +377,120 @@ class ChatViewModel(
 
     fun toggleSystemChats(show: Boolean) {
         _uiState.update { it.copy(showSystemChats = show) }
+    }
+
+    fun deleteConversation(id: String) {
+        viewModelScope.launch {
+            repository.deleteConversation(id)
+            _uiState.update { state ->
+                val newConversations = state.conversations.filter { it.id != id }
+                val wasActive = state.activeConversationId == id
+                state.copy(
+                    conversations = newConversations,
+                    activeConversationId = if (wasActive) null else state.activeConversationId,
+                    messages = if (wasActive) emptyList() else state.messages
+                )
+            }
+        }
+    }
+
+    fun regenerateMessage(messageId: String) {
+        val convId = _uiState.value.activeConversationId ?: return
+        if (_uiState.value.sending || _uiState.value.streaming) return
+
+        _uiState.update { state ->
+            state.copy(
+                streaming = true,
+                messages = state.messages.map { msg ->
+                    if (msg.id == messageId) msg.copy(content = "") else msg
+                },
+                toolCallsByMessageId = state.toolCallsByMessageId - messageId
+            )
+        }
+        streamingBuffer.clear()
+        streamingAssistantId = messageId
+
+        viewModelScope.launch {
+            try {
+                val streamToolCalls = mutableListOf<ToolCallDto>()
+                var lastFlushTime = System.currentTimeMillis()
+
+                repository.streamRegenerate(convId, messageId).collect { event ->
+                    when (event) {
+                        is StreamEvent.Delta -> {
+                            streamingBuffer.append(event.token)
+                            val nowMs = System.currentTimeMillis()
+                            if (nowMs - lastFlushTime >= 80) {
+                                lastFlushTime = nowMs
+                                val currentContent = streamingBuffer.toString()
+                                _uiState.update { state ->
+                                    state.copy(
+                                        messages = state.messages.map { msg ->
+                                            if (msg.id == messageId) msg.copy(content = currentContent) else msg
+                                        }
+                                    )
+                                }
+                            }
+                        }
+                        is StreamEvent.ToolCall -> {
+                            val dto = ToolCallDto(
+                                name = event.name,
+                                arguments = parseToolArguments(event.arguments),
+                                status = "running",
+                                output = null
+                            )
+                            streamToolCalls.add(dto)
+                            _uiState.update { state ->
+                                state.copy(toolCallsByMessageId = state.toolCallsByMessageId + (messageId to streamToolCalls.toList()))
+                            }
+                        }
+                        is StreamEvent.ToolResult -> {
+                            val idx = streamToolCalls.indexOfLast { it.name == event.name }
+                            if (idx >= 0) {
+                                streamToolCalls[idx] = streamToolCalls[idx].copy(status = "success", output = event.result)
+                                _uiState.update { state ->
+                                    state.copy(toolCallsByMessageId = state.toolCallsByMessageId + (messageId to streamToolCalls.toList()))
+                                }
+                            }
+                        }
+                        is StreamEvent.Done -> {
+                            streamingBuffer.clear()
+                            streamingAssistantId = null
+                            _uiState.update { state ->
+                                state.copy(
+                                    streaming = false,
+                                    messages = state.messages.map { msg ->
+                                        if (msg.id == messageId) msg.copy(content = event.output) else msg
+                                    }
+                                )
+                            }
+                        }
+                        is StreamEvent.Error -> {
+                            Log.e(TAG, "Regenerate stream error: ${event.error}")
+                            streamingBuffer.clear()
+                            streamingAssistantId = null
+                            _uiState.update { state ->
+                                state.copy(
+                                    streaming = false,
+                                    messages = state.messages.map { msg ->
+                                        if (msg.id == messageId && msg.content.isBlank()) msg.copy(content = ":warning:️ ${event.error}") else msg
+                                    }
+                                )
+                            }
+                        }
+                    }
+                }
+
+                // Cache the regenerated message
+                _uiState.value.messages.find { it.id == messageId }?.let {
+                    repository.cacheMessage(it)
+                }
+            } catch (e: Exception) {
+                Log.e(TAG, "Regenerate failed", e)
+                _uiState.update { it.copy(streaming = false) }
+            }
+            _uiState.update { it.copy(sending = false, streaming = false) }
+        }
     }
 
     fun sendMessage(text: String = _uiState.value.composing, isTranscribed: Boolean = false) {
@@ -481,7 +740,6 @@ class ChatViewModel(
         if (attachments.isEmpty()) return text
 
         val parts = mutableListOf<String>()
-        if (text.isNotBlank()) parts.add(text)
 
         for (attachment in attachments) {
             if (attachment.isImage) {
@@ -505,6 +763,8 @@ class ChatViewModel(
                 parts.add("[Attached file: ${attachment.name}]")
             }
         }
+
+        if (text.isNotBlank()) parts.add(text)
 
         return parts.joinToString("\n\n")
     }

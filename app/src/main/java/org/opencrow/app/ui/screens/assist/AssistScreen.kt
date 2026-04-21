@@ -20,6 +20,7 @@ import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Close
@@ -32,6 +33,7 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.drawBehind
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.graphics.Brush
@@ -54,12 +56,13 @@ import java.io.File
 @Composable
 fun AssistScreen(
     screenshotPath: String? = null,
+    externalViewModel: AssistViewModel? = null,
     onDismiss: () -> Unit,
     onOpenFullScreen: (conversationId: String?) -> Unit = {}
 ) {
     val context = LocalContext.current
     val app = context.applicationContext as OpenCrowApp
-    val viewModel: AssistViewModel = viewModel(
+    val viewModel: AssistViewModel = externalViewModel ?: viewModel(
         factory = AssistViewModel.Factory(
             app.container.conversationRepository,
             app.container.configRepository,
@@ -228,12 +231,16 @@ fun AssistScreen(
                                     .weight(1f, fill = false)
                                     .padding(horizontal = spacing.md),
                                 contentPadding = PaddingValues(vertical = spacing.sm),
-                                verticalArrangement = Arrangement.spacedBy(spacing.sm)
+                                verticalArrangement = Arrangement.spacedBy(spacing.lg)
                             ) {
+                                val attachmentsMap = state.attachmentsByMessageId
                                 items(state.messages, key = { it.id }) { msg ->
-                                    MessageBubble(message = msg)
+                                    MessageBubble(
+                                        message = msg,
+                                        attachments = attachmentsMap[msg.id].orEmpty()
+                                    )
                                 }
-                                if (state.sending) {
+                                if (state.sending || (state.streaming && state.messages.lastOrNull()?.role == "assistant" && state.messages.lastOrNull()?.content?.isEmpty() == true)) {
                                     item { ThinkingBubble() }
                                 }
                             }
@@ -402,10 +409,29 @@ private fun AssistInputBar(
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.spacedBy(spacing.xs)
             ) {
+                // Keep as State<Float> (no `by`) so value is read in drawBehind (draw phase)
+                // not composition phase -- prevents full recomposition every animation frame
+                val recordingPulseAlpha = rememberInfiniteTransition(label = "pulse").animateFloat(
+                    initialValue = 0.0f,
+                    targetValue = 0.2f,
+                    animationSpec = infiniteRepeatable(
+                        animation = tween(1000),
+                        repeatMode = RepeatMode.Reverse
+                    ),
+                    label = "pulse_alpha"
+                )
+                val errorColor = MaterialTheme.colorScheme.error
+
                 IconButton(
                     onClick = { if (recording) onStopRecording() else if (!transcribing) onStartRecording() },
                     enabled = !transcribing,
-                    modifier = Modifier.size(40.dp)
+                    modifier = Modifier
+                        .size(40.dp)
+                        .drawBehind {
+                            if (recording) {
+                                drawCircle(color = errorColor.copy(alpha = recordingPulseAlpha.value))
+                            }
+                        }
                 ) {
                     if (transcribing) {
                         CircularProgressIndicator(
@@ -455,7 +481,7 @@ private fun AssistInputBar(
                     colors = IconButtonDefaults.filledIconButtonColors(
                         containerColor = MaterialTheme.colorScheme.primary,
                         contentColor = MaterialTheme.colorScheme.onPrimary,
-                        disabledContainerColor = MaterialTheme.colorScheme.surfaceContainerHighest,
+                        disabledContainerColor = MaterialTheme.colorScheme.surfaceContainerHigh,
                         disabledContentColor = MaterialTheme.colorScheme.onSurfaceVariant
                     )
                 ) {

@@ -108,6 +108,25 @@ class ConversationRepository(
         return streamingClient.stream(CompleteRequest(conversationId, text))
     }
 
+    fun streamRegenerate(conversationId: String, messageId: String): kotlinx.coroutines.flow.Flow<StreamEvent> {
+        return streamingClient.streamRegenerate(conversationId, messageId)
+    }
+
+    suspend fun deleteConversation(id: String): Boolean {
+        return try {
+            val resp = apiClient.api.deleteConversation(id)
+            if (resp.isSuccessful || resp.code() == 404) {
+                conversationDao.deleteById(id)
+                messageDao.deleteByConversation(id)
+                toolCallDao.deleteByConversation(id)
+                true
+            } else false
+        } catch (e: Exception) {
+            Log.e(TAG, "Failed to delete conversation", e)
+            false
+        }
+    }
+
     suspend fun cacheMessage(message: MessageDto) {
         messageDao.upsert(message.toCached())
     }

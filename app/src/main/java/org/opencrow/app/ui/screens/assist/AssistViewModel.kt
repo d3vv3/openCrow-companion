@@ -23,6 +23,8 @@ import org.opencrow.app.data.remote.StreamEvent
 import org.opencrow.app.data.remote.dto.MessageDto
 import org.opencrow.app.data.repository.ConfigRepository
 import org.opencrow.app.data.repository.ConversationRepository
+import org.opencrow.app.di.ActiveStreamState
+import org.opencrow.app.ui.screens.chat.Attachment
 import java.io.ByteArrayOutputStream
 import java.io.File
 import java.text.SimpleDateFormat
@@ -40,7 +42,8 @@ data class AssistUiState(
     val screenshotAvailable: Boolean = false,
     val attachScreenshot: Boolean = false,
     val recording: Boolean = false,
-    val transcribing: Boolean = false
+    val transcribing: Boolean = false,
+    val attachmentsByMessageId: Map<String, List<Attachment>> = emptyMap()
 )
 
 class AssistViewModel(
@@ -51,7 +54,6 @@ class AssistViewModel(
 
     companion object {
         private const val TAG = "AssistVM"
-        private const val PREF_ATTACH_SCREENSHOT = "assist_attach_screenshot"
     }
 
     private val _uiState = MutableStateFlow(AssistUiState())
@@ -62,24 +64,10 @@ class AssistViewModel(
     private var mediaRecorder: MediaRecorder? = null
     private var audioFile: File? = null
 
-    /** Cached user preference — null until loaded from DB */
-    private var savedScreenshotPref: Boolean? = null
-
     init {
         checkApiReady()
-        loadScreenshotPreference()
     }
 
-    private fun loadScreenshotPreference() {
-        viewModelScope.launch {
-            val saved = configRepository.getLocalSetting(PREF_ATTACH_SCREENSHOT)
-            savedScreenshotPref = saved?.toBooleanStrictOrNull() ?: false
-            // Apply to current state if a screenshot path is already set
-            if (_uiState.value.screenshotPath != null) {
-                _uiState.update { it.copy(attachScreenshot = savedScreenshotPref!!) }
-            }
-        }
-    }
 
     private fun checkApiReady() {
         viewModelScope.launch {
@@ -94,23 +82,32 @@ class AssistViewModel(
         }
     }
 
+    fun resetConversation() {
+        // Clear all conversation state so the next message starts fresh
+        _uiState.update { current ->
+            AssistUiState(
+                apiReady = current.apiReady,
+                screenshotPath = current.screenshotPath,
+                screenshotAvailable = current.screenshotAvailable
+            )
+        }
+        streamingBuffer.clear()
+        val app = appContext as org.opencrow.app.OpenCrowApp
+        app.container.activeStream.value = null
+    }
+
     fun setScreenshotPath(path: String?) {
-        val pref = savedScreenshotPref ?: false
         _uiState.update {
             it.copy(
                 screenshotPath = path,
                 screenshotAvailable = path != null,
-                attachScreenshot = path != null && pref
+                attachScreenshot = false // Always default to false when a new screenshot arrives
             )
         }
     }
 
     fun toggleAttachScreenshot(attach: Boolean) {
         _uiState.update { it.copy(attachScreenshot = attach) }
-        viewModelScope.launch {
-            configRepository.setLocalSetting(PREF_ATTACH_SCREENSHOT, attach.toString())
-            savedScreenshotPref = attach
-        }
     }
 
     fun updateComposing(text: String) {
@@ -144,18 +141,32 @@ class AssistViewModel(
                 }
 
                 // Build message content, optionally embedding the screenshot
+                val screenshotBytes: ByteArray? = if (shouldAttachScreenshot) {
+                    withContext(Dispatchers.IO) {
+                        try {
+                            val file = File(_uiState.value.screenshotPath!!)
+                            val bitmap = BitmapFactory.decodeFile(file.absolutePath)
+                            if (bitmap != null) {
+                                val baos = ByteArrayOutputStream()
+                                bitmap.compress(android.graphics.Bitmap.CompressFormat.JPEG, 80, baos)
+                                bitmap.recycle()
+                                baos.toByteArray()
+                            } else null
+                        } catch (e: Exception) {
+                            Log.e(TAG, "Failed to read screenshot bytes", e)
+                            null
+                        }
+                    }
+                } else null
+
                 val messageContent = if (shouldAttachScreenshot) {
                     buildMessageWithScreenshot(trimmed, _uiState.value.screenshotPath!!)
                 } else {
                     trimmed
                 }
 
-                // Display content for the optimistic message (no base64)
-                val displayContent = if (shouldAttachScreenshot) {
-                    "$trimmed\n📎 Screenshot"
-                } else {
-                    trimmed
-                }
+                // Display content for the optimistic message (no base64 blob in text)
+                val displayContent = trimmed
 
                 // Optimistic user message
                 val tempMsg = MessageDto(
@@ -166,10 +177,21 @@ class AssistViewModel(
                     createdAt = now
                 )
                 _uiState.update {
+                    val screenshotAttachment = if (screenshotBytes != null) {
+                        Attachment(
+                            uri = android.net.Uri.fromFile(File(_uiState.value.screenshotPath!!)),
+                            name = "Screenshot",
+                            mimeType = "image/jpeg",
+                            bytes = screenshotBytes
+                        )
+                    } else null
                     it.copy(
                         messages = it.messages + tempMsg,
                         // Once sent, disable the screenshot toggle so it's not re-sent
-                        attachScreenshot = false
+                        attachScreenshot = false,
+                        attachmentsByMessageId = if (screenshotAttachment != null)
+                            it.attachmentsByMessageId + (tempMsg.id to listOf(screenshotAttachment))
+                        else it.attachmentsByMessageId
                     )
                 }
 
@@ -177,9 +199,15 @@ class AssistViewModel(
                 val savedMsg = repository.createMessage(convId, "user", messageContent)
                 if (savedMsg != null) {
                     _uiState.update { state ->
-                        state.copy(messages = state.messages.map {
-                            if (it.id == tempMsg.id) savedMsg.copy(content = displayContent) else it
-                        })
+                        val newAttachmentMap = if (state.attachmentsByMessageId.containsKey(tempMsg.id)) {
+                            state.attachmentsByMessageId - tempMsg.id + (savedMsg.id to state.attachmentsByMessageId[tempMsg.id]!!)
+                        } else state.attachmentsByMessageId
+                        state.copy(
+                            messages = state.messages.map {
+                                if (it.id == tempMsg.id) savedMsg.copy(content = displayContent) else it
+                            },
+                            attachmentsByMessageId = newAttachmentMap
+                        )
                     }
                 }
 
@@ -202,6 +230,15 @@ class AssistViewModel(
 
                 streamingBuffer.clear()
                 var lastFlushTime = System.currentTimeMillis()
+                val app = appContext as org.opencrow.app.OpenCrowApp
+
+                // Signal streaming start to ChatViewModel (if it's open)
+                app.container.activeStream.value = ActiveStreamState(
+                    conversationId = convId,
+                    messageId = assistantId,
+                    content = "",
+                    isStreaming = true
+                )
 
                 repository.streamMessage(convId, messageContent).collect { event ->
                     when (event) {
@@ -216,6 +253,13 @@ class AssistViewModel(
                                         if (msg.id == assistantId) msg.copy(content = content) else msg
                                     })
                                 }
+                                // Bridge to ChatViewModel
+                                app.container.activeStream.value = ActiveStreamState(
+                                    conversationId = convId,
+                                    messageId = assistantId,
+                                    content = content,
+                                    isStreaming = true
+                                )
                             }
                         }
                         is StreamEvent.Done -> {
@@ -228,6 +272,14 @@ class AssistViewModel(
                                     }
                                 )
                             }
+                            // Final update then clear
+                            app.container.activeStream.value = ActiveStreamState(
+                                conversationId = convId,
+                                messageId = assistantId,
+                                content = event.output,
+                                isStreaming = false
+                            )
+                            app.container.activeStream.value = null
                         }
                         is StreamEvent.Error -> {
                             streamingBuffer.clear()
@@ -236,11 +288,12 @@ class AssistViewModel(
                                     streaming = false,
                                     messages = state.messages.map { msg ->
                                         if (msg.id == assistantId && msg.content.isBlank()) {
-                                            msg.copy(content = "⚠ ${event.error}")
+                                            msg.copy(content = ":warning: ${event.error}")
                                         } else msg
                                     }
                                 )
                             }
+                            app.container.activeStream.value = null
                         }
                         is StreamEvent.ToolCall -> {}
                         is StreamEvent.ToolResult -> {}
@@ -280,11 +333,11 @@ class AssistViewModel(
                 null
             }
         }
-        return if (dataUri != null) {
-            "$text\n\n![screenshot]($dataUri)"
-        } else {
-            text
-        }
+        val parts = mutableListOf<String>()
+        if (dataUri != null) parts.add("![screenshot]($dataUri)")
+        if (text.isNotBlank()) parts.add(text)
+        
+        return parts.joinToString("\n\n")
     }
 
     fun startRecording(context: Context) {

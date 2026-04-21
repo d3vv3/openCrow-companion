@@ -19,17 +19,14 @@ fun ThinkingBubble() {
         modifier = Modifier.fillMaxWidth(),
         horizontalArrangement = Arrangement.Start
     ) {
-        Surface(
-            color = MaterialTheme.colorScheme.surfaceContainerHigh,
-            shape = MaterialTheme.shapes.medium
-        ) {
-            Row(
-                modifier = Modifier.padding(horizontal = 20.dp, vertical = 16.dp),
-                horizontalArrangement = Arrangement.spacedBy(6.dp)
-            ) {
-                repeat(3) { i -> ThinkingDot(transition, i) }
-            }
-        }
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(horizontal = 20.dp, vertical = 16.dp),
+        horizontalArrangement = Arrangement.spacedBy(6.dp)
+    ) {
+        repeat(3) { i -> ThinkingDot(transition, i) }
+    }
     }
 }
 

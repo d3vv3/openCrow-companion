@@ -5,11 +5,10 @@ import android.content.pm.PackageManager
 import android.provider.OpenableColumns
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
-import androidx.compose.animation.AnimatedVisibility
-import androidx.compose.animation.fadeIn
-import androidx.compose.animation.fadeOut
-import androidx.compose.animation.slideInVertically
-import androidx.compose.animation.slideOutVertically
+import androidx.compose.animation.*
+import androidx.compose.animation.core.*
+import androidx.compose.foundation.background
+import androidx.compose.foundation.gestures.detectHorizontalDragGestures
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
@@ -24,7 +23,10 @@ import androidx.compose.material3.pulltorefresh.PullToRefreshBox
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.drawBehind
+import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -99,7 +101,21 @@ fun ChatScreen(
         activeConversation?.title?.contains("[telegram]", ignoreCase = true) == true
     }
 
-    Box(modifier = Modifier.fillMaxSize()) {
+    Box(modifier = Modifier
+        .fillMaxSize()
+        .pointerInput(Unit) {
+            var totalDrag = 0f
+            detectHorizontalDragGestures(
+                onDragStart = { totalDrag = 0f },
+                onHorizontalDrag = { _, dx -> totalDrag += dx },
+                onDragEnd = {
+                    if (totalDrag > 80f && !state.showHistory) viewModel.toggleHistory(true)
+                    totalDrag = 0f
+                },
+                onDragCancel = { totalDrag = 0f }
+            )
+        }
+    ) {
         Scaffold(
             containerColor = MaterialTheme.colorScheme.background
         ) { padding ->
@@ -107,88 +123,151 @@ fun ChatScreen(
                 modifier = Modifier
                     .fillMaxSize()
                     .padding(padding)
-            ) {
-            Column(
-                modifier = Modifier
-                    .fillMaxSize()
-                    .padding(top = 56.dp)
                     .imePadding()
             ) {
-                // Messages area
-                Box(modifier = Modifier.weight(1f)) {
-                    if (state.activeConversationId == null) {
-                        Box(
-                            modifier = Modifier.fillMaxSize(),
-                            contentAlignment = Alignment.Center
-                        ) {
-                            Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                                Text(
-                                    "Chat",
-                                    style = MaterialTheme.typography.headlineMedium,
-                                    color = MaterialTheme.colorScheme.onSurface
-                                )
-                                Spacer(Modifier.height(spacing.sm))
-                                Text(
-                                    "Start a new conversation",
-                                    style = MaterialTheme.typography.bodyMedium,
-                                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                                )
-                            }
-                        }
-                    } else if (state.loadingMessages) {
-                        Box(
-                            modifier = Modifier.fillMaxSize(),
-                            contentAlignment = Alignment.Center
-                        ) {
-                            CircularProgressIndicator(color = MaterialTheme.colorScheme.primary)
-                        }
-                    } else {
-                        PullToRefreshBox(
-                            isRefreshing = state.refreshingMessages,
-                            onRefresh = { viewModel.refreshMessages() },
-                            modifier = Modifier.fillMaxSize()
-                        ) {
-                            LazyColumn(
-                                state = listState,
-                                modifier = Modifier
-                                    .fillMaxSize()
-                                    .padding(horizontal = spacing.md),
-                                contentPadding = PaddingValues(vertical = spacing.md),
-                                verticalArrangement = Arrangement.spacedBy(spacing.sm)
-                            ) {
-                                // Snapshot the maps once per composition to avoid
-                                // re-reading state inside each item lambda
-                                val toolCallsMap = state.toolCallsByMessageId
-                                val attachmentsMap = state.attachmentsByMessageId
-                                val transcribedIds = state.transcribedMessageIds
+            // ── Messages area fills the full box; bars float on top ──
+            if (state.activeConversationId == null) {
+                Box(
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .padding(top = 72.dp, bottom = 96.dp),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                        Text(
+                            "Chat",
+                            style = MaterialTheme.typography.headlineMedium,
+                            color = MaterialTheme.colorScheme.onSurface
+                        )
+                        Spacer(Modifier.height(spacing.sm))
+                        Text(
+                            "Start a new conversation",
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+                }
+            } else if (state.loadingMessages) {
+                Box(
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .padding(top = 72.dp, bottom = 96.dp),
+                    contentAlignment = Alignment.Center
+                ) {
+                    CircularProgressIndicator(color = MaterialTheme.colorScheme.primary)
+                }
+            } else {
+                PullToRefreshBox(
+                    isRefreshing = state.refreshingMessages,
+                    onRefresh = { viewModel.refreshMessages() },
+                    modifier = Modifier.fillMaxSize()
+                ) {
+                    LazyColumn(
+                        state = listState,
+                        modifier = Modifier
+                            .fillMaxSize()
+                            .padding(horizontal = spacing.md),
+                        // top: clears floating buttons; bottom: extra room so last message clears input bar
+                        contentPadding = PaddingValues(top = 72.dp, bottom = 128.dp),
+                        verticalArrangement = Arrangement.spacedBy(spacing.lg)
+                    ) {
+                        // Snapshot maps once per composition to avoid re-reading inside each item lambda
+                        val toolCallsMap = state.toolCallsByMessageId
+                        val attachmentsMap = state.attachmentsByMessageId
+                        val transcribedIds = state.transcribedMessageIds
 
-                                items(state.messages, key = { it.id }) { msg ->
-                                    val toolCalls = toolCallsMap[msg.id]
-                                    val msgAttachments = attachmentsMap[msg.id].orEmpty()
-                                    Column(verticalArrangement = Arrangement.spacedBy(spacing.sm)) {
-                                        // Show tool calls before the assistant response
-                                        if (msg.role == "assistant" && !toolCalls.isNullOrEmpty()) {
-                                            ToolCallBubble(toolCalls = toolCalls)
-                                        }
-                                    MessageBubble(
-                                        message = msg,
-                                        isTranscribed = msg.id in transcribedIds,
-                                        attachments = msgAttachments
-                                    )
+                        items(state.messages, key = { it.id }) { msg ->
+                            val toolCalls = toolCallsMap[msg.id]
+                            val msgAttachments = attachmentsMap[msg.id].orEmpty()
+                            Column(verticalArrangement = Arrangement.spacedBy(spacing.sm)) {
+                                if (msg.role == "assistant" && !toolCalls.isNullOrEmpty()) {
+                                    ToolCallBubble(toolCalls = toolCalls)
                                 }
-                            }
-                            if (state.sending) {
-                                item { ThinkingBubble() }
+                                MessageBubble(
+                                    message = msg,
+                                    isTranscribed = msg.id in transcribedIds,
+                                    attachments = msgAttachments,
+                                    onRegenerate = if (msg.role == "assistant" && !state.streaming && !state.sending) {
+                                        { viewModel.regenerateMessage(msg.id) }
+                                    } else null
+                                )
                             }
                         }
+                        if (state.sending || (state.streaming && state.messages.lastOrNull()?.role == "assistant" && state.messages.lastOrNull()?.content?.isEmpty() == true)) {
+                            item { ThinkingBubble() }
                         }
                     }
                 }
+            }
 
-                // Input bar
-                if (isTelegramChat) {
-                    TelegramReadOnlyBar()
+            // ── Top gradient: smoothly fades messages into the status bar area ──
+            val bgColor = MaterialTheme.colorScheme.background
+            Box(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(80.dp)
+                    .align(Alignment.TopCenter)
+                    .background(
+                        Brush.verticalGradient(
+                            colors = listOf(bgColor, Color.Transparent)
+                        )
+                    )
+            )
+
+            // ── Floating navigation buttons -- history (left) and new chat (right) ──
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .align(Alignment.TopCenter)
+                    .padding(horizontal = 12.dp, vertical = 8.dp),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Surface(
+                    onClick = { viewModel.toggleHistory(true) },
+                    shape = CircleShape,
+                    color = MaterialTheme.colorScheme.surfaceContainerHighest,
+                    shadowElevation = 6.dp,
+                    modifier = Modifier.size(44.dp)
+                ) {
+                    Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                        Icon(
+                            Icons.Default.Menu,
+                            contentDescription = "Chat history",
+                            tint = MaterialTheme.colorScheme.onSurface,
+                            modifier = Modifier.size(20.dp)
+                        )
+                    }
+                }
+                if (hasActiveChat) {
+                    Surface(
+                        onClick = { viewModel.clearActiveConversation() },
+                        shape = CircleShape,
+                        color = MaterialTheme.colorScheme.surfaceContainerHighest,
+                        shadowElevation = 6.dp,
+                        modifier = Modifier.size(44.dp)
+                    ) {
+                        Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                            Icon(
+                                Icons.Outlined.AutoAwesome,
+                                contentDescription = "New chat",
+                                tint = MaterialTheme.colorScheme.onSurface,
+                                modifier = Modifier.size(20.dp)
+                            )
+                        }
+                    }
                 } else {
+                    Spacer(Modifier.size(44.dp))
+                }
+            }
+
+            // ── Floating bottom bar -- attachment preview + input ──
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .align(Alignment.BottomCenter)
+            ) {
+                if (!isTelegramChat) {
                     // Attachment preview
                     AnimatedVisibility(
                         visible = state.attachments.isNotEmpty(),
@@ -214,7 +293,11 @@ fun ChatScreen(
                             }
                         }
                     }
+                }
 
+                if (isTelegramChat) {
+                    TelegramReadOnlyBar()
+                } else {
                     ChatInputBar(
                         composing = state.composing,
                         onComposingChange = viewModel::updateComposing,
@@ -237,52 +320,6 @@ fun ChatScreen(
                 }
             }
 
-            // Floating navigation buttons — history (top-left) and new chat (top-right)
-            Row(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .align(Alignment.TopCenter)
-                    .padding(horizontal = 12.dp, vertical = 8.dp),
-                horizontalArrangement = Arrangement.SpaceBetween,
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                Surface(
-                    onClick = { viewModel.toggleHistory(true) },
-                    shape = CircleShape,
-                    color = MaterialTheme.colorScheme.surfaceContainerHighest,
-                    shadowElevation = 4.dp,
-                    modifier = Modifier.size(44.dp)
-                ) {
-                    Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                        Icon(
-                            Icons.Default.Menu,
-                            contentDescription = "Chat history",
-                            tint = MaterialTheme.colorScheme.onSurface,
-                            modifier = Modifier.size(20.dp)
-                        )
-                    }
-                }
-                if (hasActiveChat) {
-                    Surface(
-                        onClick = { viewModel.clearActiveConversation() },
-                        shape = CircleShape,
-                        color = MaterialTheme.colorScheme.surfaceContainerHighest,
-                        shadowElevation = 4.dp,
-                        modifier = Modifier.size(44.dp)
-                    ) {
-                        Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                            Icon(
-                                Icons.Outlined.AutoAwesome,
-                                contentDescription = "New chat",
-                                tint = MaterialTheme.colorScheme.onSurface,
-                                modifier = Modifier.size(20.dp)
-                            )
-                        }
-                    }
-                } else {
-                    Spacer(Modifier.size(44.dp))
-                }
-            }
             } // closes inner Box
 
         // History bottom sheet overlay
@@ -293,6 +330,7 @@ fun ChatScreen(
             showSystemChats = state.showSystemChats,
             onToggleSystemChats = viewModel::toggleSystemChats,
             onSelectConversation = viewModel::selectConversation,
+            onDeleteConversation = viewModel::deleteConversation,
             onDismiss = { viewModel.toggleHistory(false) }
         )
     }
@@ -484,10 +522,29 @@ private fun ChatInputBar(
                     shape = RoundedCornerShape(12.dp)
                 )
 
+                // Keep as State<Float> (no `by`) so the value is read in drawBehind (draw phase)
+                // instead of composition phase -- prevents full recomposition every animation frame
+                val recordingPulseAlpha = rememberInfiniteTransition(label = "pulse").animateFloat(
+                    initialValue = 0.0f,
+                    targetValue = 0.2f,
+                    animationSpec = infiniteRepeatable(
+                        animation = tween(1000),
+                        repeatMode = RepeatMode.Reverse
+                    ),
+                    label = "pulse_alpha"
+                )
+                val errorColor = MaterialTheme.colorScheme.error
+
                 IconButton(
                     onClick = { if (recording) onStopRecording() else if (!transcribing) onStartRecording() },
                     enabled = !transcribing,
-                    modifier = Modifier.size(40.dp)
+                    modifier = Modifier
+                        .size(40.dp)
+                        .drawBehind {
+                            if (recording) {
+                                drawCircle(color = errorColor.copy(alpha = recordingPulseAlpha.value))
+                            }
+                        }
                 ) {
                     if (transcribing) {
                         CircularProgressIndicator(
@@ -509,7 +566,7 @@ private fun ChatInputBar(
                     onClick = onSend,
                     enabled = (composing.isNotBlank() || hasAttachments) && !sending,
                     modifier = Modifier.size(40.dp),
-                    shape = MaterialTheme.shapes.small,
+                    shape = RoundedCornerShape(12.dp),
                     colors = IconButtonDefaults.filledIconButtonColors(
                         containerColor = MaterialTheme.colorScheme.primary,
                         contentColor = MaterialTheme.colorScheme.onPrimary,

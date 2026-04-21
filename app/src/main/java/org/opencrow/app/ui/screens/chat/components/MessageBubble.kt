@@ -8,10 +8,12 @@ import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.InsertDriveFile
 import androidx.compose.material.icons.filled.Mic
+import androidx.compose.material.icons.outlined.Refresh
 import androidx.compose.material3.*
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
@@ -35,7 +37,8 @@ import org.opencrow.app.ui.theme.LocalSpacing
 fun MessageBubble(
     message: MessageDto,
     isTranscribed: Boolean = false,
-    attachments: List<Attachment> = emptyList()
+    attachments: List<Attachment> = emptyList(),
+    onRegenerate: (() -> Unit)? = null
 ) {
     val isUser = message.role == "user"
     val isSystem = message.role == "system"
@@ -44,20 +47,22 @@ fun MessageBubble(
     val haptic = LocalHapticFeedback.current
 
     if (isUser) {
+        val userMessageShape = RoundedCornerShape(
+            topStart = 18.dp,
+            topEnd = 4.dp,
+            bottomStart = 18.dp,
+            bottomEnd = 18.dp
+        )
         Row(
             modifier = Modifier.fillMaxWidth(),
             horizontalArrangement = Arrangement.End
         ) {
             Surface(
                 color = MaterialTheme.colorScheme.primaryContainer,
-                shape = RoundedCornerShape(
-                    topStart = 18.dp,
-                    topEnd = 4.dp,
-                    bottomStart = 18.dp,
-                    bottomEnd = 18.dp
-                ),
+                shape = userMessageShape,
                 modifier = Modifier
                     .widthIn(max = 280.dp)
+                    .clip(userMessageShape)
                     .combinedClickable(
                         onClick = {},
                         onLongClick = {
@@ -73,7 +78,10 @@ fun MessageBubble(
                         Column(verticalArrangement = Arrangement.spacedBy(spacing.xs)) {
                             for (att in attachments.filter { it.isImage }) {
                                 AsyncImage(
-                                    model = ImageRequest.Builder(context).data(att.uri).crossfade(true).build(),
+                                    model = ImageRequest.Builder(context)
+                                        .data(att.bytes ?: att.uri)
+                                        .crossfade(true)
+                                        .build(),
                                     contentDescription = att.name,
                                     contentScale = ContentScale.FillWidth,
                                     modifier = Modifier
@@ -164,6 +172,26 @@ fun MessageBubble(
                         style = MaterialTheme.typography.bodyMedium,
                         color = MaterialTheme.colorScheme.onSurface
                     )
+                }
+                // Regenerate button for assistant messages
+                if (!isSystem && onRegenerate != null) {
+                    Spacer(Modifier.height(spacing.xxs))
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.End
+                    ) {
+                        IconButton(
+                            onClick = onRegenerate,
+                            modifier = Modifier.size(28.dp)
+                        ) {
+                            Icon(
+                                Icons.Outlined.Refresh,
+                                contentDescription = "Regenerate response",
+                                modifier = Modifier.size(16.dp),
+                                tint = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.5f)
+                            )
+                        }
+                    }
                 }
             }
         }
