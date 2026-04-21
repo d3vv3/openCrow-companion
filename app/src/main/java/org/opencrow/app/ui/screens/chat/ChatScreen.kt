@@ -39,6 +39,7 @@ import org.opencrow.app.ui.screens.chat.components.MessageBubble
 import org.opencrow.app.ui.screens.chat.components.ThinkingBubble
 import org.opencrow.app.ui.screens.chat.components.ToolCallBubble
 import org.opencrow.app.ui.theme.LocalSpacing
+import kotlin.random.Random
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -83,6 +84,23 @@ fun ChatScreen(
             }
         }
         if (!state.streaming) streamingScrollThreshold.intValue = 0
+    }
+
+    // Typing haptic feedback while the assistant is streaming
+    val view = androidx.compose.ui.platform.LocalView.current
+    // Micro tap on each token flush -- randomly skip ~30% to break periodicity
+    LaunchedEffect(lastMessageLength) {
+        if (state.streaming && lastMessageLength > 0 && Random.nextFloat() > 0.3f) {
+            view.performHapticFeedback(android.view.HapticFeedbackConstants.KEYBOARD_TAP)
+        }
+    }
+    // Strong confirmation tap when streaming finishes
+    var prevStreaming by remember { mutableStateOf(false) }
+    LaunchedEffect(state.streaming) {
+        if (prevStreaming && !state.streaming) {
+            view.performHapticFeedback(android.view.HapticFeedbackConstants.CONFIRM)
+        }
+        prevStreaming = state.streaming
     }
 
     val visibleConversations = remember(state.conversations, state.showSystemChats) {

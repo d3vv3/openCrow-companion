@@ -182,12 +182,12 @@ fun MessageBubble(
                     ) {
                         IconButton(
                             onClick = onRegenerate,
-                            modifier = Modifier.size(28.dp)
+                            modifier = Modifier.size(36.dp)
                         ) {
                             Icon(
                                 Icons.Outlined.Refresh,
                                 contentDescription = "Regenerate response",
-                                modifier = Modifier.size(16.dp),
+                                modifier = Modifier.size(22.dp),
                                 tint = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.5f)
                             )
                         }

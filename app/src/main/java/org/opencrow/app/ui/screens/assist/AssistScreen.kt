@@ -93,6 +93,21 @@ fun AssistScreen(
         if (!state.streaming) streamingScrollThreshold.intValue = 0
     }
 
+    // Typing haptic feedback while the assistant is streaming
+    val view = androidx.compose.ui.platform.LocalView.current
+    LaunchedEffect(lastMessageLength) {
+        if (state.streaming && lastMessageLength > 0 && kotlin.random.Random.nextFloat() > 0.3f) {
+            view.performHapticFeedback(android.view.HapticFeedbackConstants.KEYBOARD_TAP)
+        }
+    }
+    var prevStreaming by remember { mutableStateOf(false) }
+    LaunchedEffect(state.streaming) {
+        if (prevStreaming && !state.streaming) {
+            view.performHapticFeedback(android.view.HapticFeedbackConstants.CONFIRM)
+        }
+        prevStreaming = state.streaming
+    }
+
     LaunchedEffect(state.apiReady) {
         if (state.apiReady) focusRequester.requestFocus()
     }
