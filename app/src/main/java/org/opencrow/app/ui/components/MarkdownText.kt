@@ -4,13 +4,16 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.ClickableText
-import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.Text
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.InsertDriveFile
+import androidx.compose.material3.*
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalUriHandler
 import androidx.compose.ui.text.*
 import androidx.compose.ui.text.font.FontFamily
@@ -91,9 +94,49 @@ fun MarkdownText(
                     } else {
                         Text(text = annotated)
                     }
+
+                    // Render images and files found in this line
+                    val images = parsed.tokens.filterIsInstance<InlineToken.Image>()
+                    val files = parsed.tokens.filterIsInstance<InlineToken.FileAttachment>()
+                    
+                    if (images.isNotEmpty() || files.isNotEmpty()) {
+                        Column(
+                            modifier = Modifier.padding(vertical = 4.dp),
+                            verticalArrangement = Arrangement.spacedBy(8.dp)
+                        ) {
+                            for (img in images) {
+                                ImageAttachment(alt = img.alt, url = img.url)
+                            }
+                            for (file in files) {
+                                FileAttachmentRow(name = file.name)
+                            }
+                        }
+                    }
                 }
             }
         }
+    }
+}
+
+@Composable
+private fun ImageAttachment(alt: String, url: String) {
+    val context = LocalContext.current
+    androidx.compose.material3.Surface(
+        color = MaterialTheme.colorScheme.surfaceVariant,
+        shape = RoundedCornerShape(12.dp),
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(vertical = 4.dp)
+    ) {
+        coil.compose.AsyncImage(
+            model = coil.request.ImageRequest.Builder(context)
+                .data(url)
+                .crossfade(true)
+                .build(),
+            contentDescription = alt,
+            modifier = Modifier.fillMaxWidth(),
+            contentScale = androidx.compose.ui.layout.ContentScale.FillWidth
+        )
     }
 }
 
@@ -116,6 +159,8 @@ private sealed class InlineToken {
     data class Italic(val text: String) : InlineToken()
     data class Code(val text: String) : InlineToken()
     data class Link(val text: String, val url: String) : InlineToken()
+    data class Image(val alt: String, val url: String) : InlineToken()
+    data class FileAttachment(val name: String) : InlineToken()
 }
 
 private fun splitCodeBlocks(text: String): List<TextSegment> {
@@ -154,7 +199,10 @@ private fun parseInlineMarkdownStructure(line: String): InlineMarkdownStructure 
         "\\*\\*(.+?)\\*\\*" +
         "|\\*(.+?)\\*" +
         "|`([^`]+)`" +
-        "|\\[([^]]+)]\\(([^)]+)\\)"
+        "|(!\\[.*?\\]\\(.*?\\))" +
+        "|(\\[[^]]+]\\([^)]+\\))" +
+        "|\\[Attached file: ([^]]+)]" +
+        "|📎\\s*(.+)"
     )
 
     val tokens = mutableListOf<InlineToken>()
@@ -163,11 +211,25 @@ private fun parseInlineMarkdownStructure(line: String): InlineMarkdownStructure 
         if (match.range.first > cursor) {
             tokens.add(InlineToken.Plain(rawLine.substring(cursor, match.range.first)))
         }
+        val g = match.groupValues
         when {
-            match.groupValues[1].isNotEmpty() -> tokens.add(InlineToken.Bold(match.groupValues[1]))
-            match.groupValues[2].isNotEmpty() -> tokens.add(InlineToken.Italic(match.groupValues[2]))
-            match.groupValues[3].isNotEmpty() -> tokens.add(InlineToken.Code(match.groupValues[3]))
-            match.groupValues[4].isNotEmpty() -> tokens.add(InlineToken.Link(match.groupValues[4], match.groupValues[5]))
+            g[1].isNotEmpty() -> tokens.add(InlineToken.Bold(g[1]))
+            g[2].isNotEmpty() -> tokens.add(InlineToken.Italic(g[2]))
+            g[3].isNotEmpty() -> tokens.add(InlineToken.Code(g[3]))
+            g[4].isNotEmpty() -> {
+                // Image tag: ![alt](url)
+                val full = g[4]
+                val alt = full.substringAfter("[").substringBefore("]")
+                val url = full.substringAfter("(").substringBeforeLast(")")
+                tokens.add(InlineToken.Image(alt, url))
+            }
+            g[5].isNotEmpty() -> {
+                // Link tag: [text](url)
+                val m = Regex("\\[([^]]+)]\\(([^)]+)\\)").matchEntire(g[5])
+                if (m != null) tokens.add(InlineToken.Link(m.groupValues[1], m.groupValues[2]))
+            }
+            g[6].isNotEmpty() -> tokens.add(InlineToken.FileAttachment(g[6]))
+            g[7].isNotEmpty() -> tokens.add(InlineToken.FileAttachment(g[7]))
         }
         cursor = match.range.last + 1
     }
@@ -210,6 +272,12 @@ private fun applyInlineMarkdownStyle(
                 ) { append(token.text) }
                 builder.pop()
             }
+            is InlineToken.Image -> {
+                // Handled visually as separate Composables, but must be exhaustive
+            }
+            is InlineToken.FileAttachment -> {
+                // Handled visually as separate Composables, but must be exhaustive
+            }
         }
     }
 
@@ -226,4 +294,33 @@ private fun applyInlineMarkdownStyle(
     }
 
     return builder.toAnnotatedString() to urlMap
+}
+
+@Composable
+private fun FileAttachmentRow(name: String) {
+    Surface(
+        color = MaterialTheme.colorScheme.surfaceContainerHigh,
+        shape = RoundedCornerShape(8.dp),
+        modifier = Modifier.fillMaxWidth()
+    ) {
+        Row(
+            modifier = Modifier.padding(12.dp),
+            verticalAlignment = androidx.compose.ui.Alignment.CenterVertically
+        ) {
+            Icon(
+                Icons.Default.InsertDriveFile,
+                contentDescription = null,
+                modifier = Modifier.size(20.dp),
+                tint = MaterialTheme.colorScheme.primary
+            )
+            Spacer(Modifier.width(8.dp))
+            Text(
+                text = name,
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.onSurface,
+                maxLines = 1,
+                overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis
+            )
+        }
+    }
 }

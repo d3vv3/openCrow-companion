@@ -22,7 +22,10 @@ object Routes {
 }
 
 @Composable
-fun AppNavHost() {
+fun AppNavHost(
+    pendingConversationId: String? = null,
+    onConversationOpened: () -> Unit = {}
+) {
     val context = LocalContext.current
     val app = context.applicationContext as OpenCrowApp
     val navController = rememberNavController()
@@ -74,9 +77,9 @@ fun AppNavHost() {
         }
         composable(Routes.CHAT) {
             ChatScreen(
-                onNavigateToSettings = {
-                    navController.navigate(Routes.SETTINGS)
-                },
+                pendingConversationId = pendingConversationId,
+                onConversationOpened = onConversationOpened,
+                onNavigateToSettings = { navController.navigate(Routes.SETTINGS) },
                 onUnpaired = {
                     navController.navigate(Routes.QR_SCAN) {
                         popUpTo(Routes.CHAT) { inclusive = true }

@@ -21,7 +21,6 @@ val CyanDim = Color(0xFF0891B2)
 val CyanLight = Color(0xFF5DE6FF)
 val ActionBlue = Color(0xFF2962FF)
 val ActionBlueDeep = Color(0xFF0049DB)
-val ErrorRose = Color(0xFFF43F5E)
 
 // ─── Light Theme ───
 val LightSurface = Color(0xFFF8F9FA)
@@ -36,10 +35,12 @@ val LightOutlineVariant = Color(0xFFC3C5D8)
 val LightViolet = Color(0xFF7C3AED)
 val LightVioletTint = Color(0xFFE8DEFF)
 val LightCyan = Color(0xFF0891B2)
-val LightErrorRose = Color(0xFFE11D48)
+
+val ErrorRose = Color(0xFFF87171)
+val LightErrorRose = Color(0xFFDC2626)
 
 // ─── Status ───
-val SuccessDark = Color(0xFF2DD4BF)
-val SuccessLight = Color(0xFF0D9488)
+val SuccessDark = Color(0xFF34D399)
+val SuccessLight = Color(0xFF059669)
 val WarningDark = Color(0xFFF59E0B)
 val WarningLight = Color(0xFFD97706)

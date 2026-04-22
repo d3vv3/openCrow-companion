@@ -61,7 +61,51 @@ class StreamingClient(private val apiClient: ApiClient) {
             }
 
             override fun onFailure(eventSource: EventSource, t: Throwable?, response: Response?) {
-                val msg = t?.message ?: response?.message ?: "Stream failed"
+                val bodyText = try { response?.peekBody(4096)?.string() } catch (_: Exception) { null }
+                val msg = bodyText?.takeIf { it.isNotBlank() } ?: t?.message ?: response?.message ?: "Stream failed"
+                android.util.Log.e("StreamingClient", "stream failure ${response?.code}: $bodyText")
+                trySend(StreamEvent.Error(msg))
+                close()
+            }
+
+            override fun onClosed(eventSource: EventSource) {
+                close()
+            }
+        }
+
+        val factory = EventSources.createFactory(client)
+        val eventSource = factory.newEventSource(httpRequest, listener)
+
+        awaitClose { eventSource.cancel() }
+    }
+
+    fun streamRegenerate(conversationId: String, messageId: String): Flow<StreamEvent> = callbackFlow {
+        val baseUrl = apiClient.getBaseUrl()
+            ?: throw IllegalStateException("API not configured")
+        val accessToken = apiClient.getAccessToken().orEmpty()
+
+        val emptyBody = ByteArray(0).toRequestBody("application/json".toMediaType())
+        val httpRequest = Request.Builder()
+            .url("$baseUrl/v1/conversations/$conversationId/messages/$messageId/regenerate")
+            .post(emptyBody)
+            .addHeader("Authorization", "Bearer $accessToken")
+            .addHeader("Accept", "text/event-stream")
+            .build()
+
+        val listener = object : EventSourceListener() {
+            override fun onEvent(eventSource: EventSource, id: String?, type: String?, data: String) {
+                val event = parseEvent(type, data) ?: return
+                trySend(event)
+                if (event is StreamEvent.Done || event is StreamEvent.Error) {
+                    eventSource.cancel()
+                    close()
+                }
+            }
+
+            override fun onFailure(eventSource: EventSource, t: Throwable?, response: Response?) {
+                val bodyText = try { response?.peekBody(4096)?.string() } catch (_: Exception) { null }
+                val msg = bodyText?.takeIf { it.isNotBlank() } ?: t?.message ?: response?.message ?: "Stream failed"
+                android.util.Log.e("StreamingClient", "regenerate failure ${response?.code}: $bodyText")
                 trySend(StreamEvent.Error(msg))
                 close()
             }

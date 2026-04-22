@@ -5,223 +5,197 @@ import android.content.ClipboardManager
 import android.content.Context
 import android.widget.Toast
 import androidx.compose.animation.animateContentSize
+import androidx.compose.animation.core.FastOutSlowInEasing
+import androidx.compose.animation.core.tween
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
 import androidx.compose.foundation.combinedClickable
+import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.Build
-import androidx.compose.material.icons.filled.CheckCircle
-import androidx.compose.material.icons.filled.Error
-import androidx.compose.material.icons.filled.ExpandLess
-import androidx.compose.material.icons.filled.ExpandMore
+import androidx.compose.material.icons.filled.KeyboardArrowUp
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.text.font.FontFamily
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import org.json.JSONArray
+import org.json.JSONObject
 import org.opencrow.app.data.remote.dto.ToolCallDto
 import org.opencrow.app.ui.theme.LocalSpacing
 
-@OptIn(ExperimentalFoundationApi::class)
+/** Renders each tool call as its own card with a glowing status dot. */
 @Composable
 fun ToolCallBubble(toolCalls: List<ToolCallDto>) {
+    Column(
+        verticalArrangement = Arrangement.spacedBy(4.dp),
+        modifier = Modifier.fillMaxWidth()
+    ) {
+        toolCalls.forEach { call ->
+            ToolCallCard(call)
+        }
+    }
+}
+
+@OptIn(ExperimentalFoundationApi::class)
+@Composable
+private fun ToolCallCard(call: ToolCallDto) {
     val spacing = LocalSpacing.current
-    var expanded by remember { mutableStateOf(false) }
     val context = LocalContext.current
     val haptic = LocalHapticFeedback.current
 
-    Row(
-        modifier = Modifier.fillMaxWidth(),
-        horizontalArrangement = Arrangement.Start
-    ) {
-        // Dot indicator aligned with assistant messages
-        Box(
-            modifier = Modifier
-                .padding(top = 10.dp, end = spacing.sm)
-                .size(8.dp)
-                .clip(RoundedCornerShape(4.dp))
-                .background(MaterialTheme.colorScheme.tertiary.copy(alpha = 0.6f))
-        )
+    val isSuccess = call.status == "success" || call.status == "ok"
+    val isError = call.status == "error" || call.status == "failed"
 
-        Surface(
-            color = MaterialTheme.colorScheme.surfaceContainerLow,
-            shape = MaterialTheme.shapes.medium,
-            modifier = Modifier
-                .widthIn(max = 300.dp)
-                .combinedClickable(
-                    onClick = { expanded = !expanded },
-                    onLongClick = {
-                        haptic.performHapticFeedback(HapticFeedbackType.LongPress)
-                        val text = toolCalls.joinToString("\n\n") { call ->
-                            buildString {
-                                append("[${call.status}] ${call.name}")
-                                call.arguments?.let { args ->
-                                    append("\n  args: ${args.entries.joinToString(", ") { (k, v) -> "$k: $v" }}")
-                                }
-                                call.output?.let { append("\n  output: $it") }
-                            }
-                        }
-                        val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
-                        clipboard.setPrimaryClip(ClipData.newPlainText("tool_calls", text))
-                        Toast.makeText(context, "Copied to clipboard", Toast.LENGTH_SHORT).show()
-                    }
-                )
-        ) {
-            Column(
+    val dotColor = when {
+        isSuccess -> Color(0xFF4CAF50)
+        isError -> Color(0xFFE53935)
+        else -> Color(0xFF2196F3)
+    }
+
+    val hasContent = !call.output.isNullOrBlank() || !call.arguments.isNullOrEmpty()
+    var expanded by remember(call.name, call.status) { mutableStateOf(false) }
+
+    val titleText = remember(call.name) { formatToolName(call.name) }
+
+    val shape = RoundedCornerShape(12.dp)
+
+    Box(
+        modifier = Modifier
+            .fillMaxWidth()
+            .animateContentSize(tween(200, easing = FastOutSlowInEasing))
+            .clip(shape)
+            .background(MaterialTheme.colorScheme.surfaceContainerHigh, shape)
+            .combinedClickable(
+                interactionSource = remember { MutableInteractionSource() },
+                indication = ripple(bounded = true),
+                onClick = { if (hasContent) expanded = !expanded },
+                onLongClick = {
+                    haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                    val text = "[${call.status}] ${call.name}\n${call.output.orEmpty()}"
+                    val cb = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
+                    cb.setPrimaryClip(ClipData.newPlainText("tool_call", text))
+                    Toast.makeText(context, "Copied", Toast.LENGTH_SHORT).show()
+                }
+            )
+    ) {
+        Column(modifier = Modifier.fillMaxWidth()) {
+            // Header row
+            Row(
                 modifier = Modifier
-                    .animateContentSize()
-                    .padding(10.dp)
+                    .fillMaxWidth()
+                    .padding(horizontal = spacing.md, vertical = 12.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(10.dp)
             ) {
-                // Header row
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(6.dp)
-                ) {
+                GlowDot(color = dotColor)
+                Text(
+                    text = titleText,
+                    style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.Medium),
+                    color = MaterialTheme.colorScheme.onSurface,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier.weight(1f)
+                )
+                if (hasContent && expanded) {
                     Icon(
-                        Icons.Filled.Build,
-                        contentDescription = null,
-                        modifier = Modifier.size(14.dp),
-                        tint = MaterialTheme.colorScheme.tertiary
-                    )
-                    Text(
-                        "${toolCalls.size} tool call${if (toolCalls.size != 1) "s" else ""}",
-                        style = MaterialTheme.typography.labelSmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                    )
-                    Spacer(Modifier.weight(1f))
-                    Icon(
-                        if (expanded) Icons.Filled.ExpandLess else Icons.Filled.ExpandMore,
-                        contentDescription = if (expanded) "Collapse" else "Expand",
-                        modifier = Modifier.size(16.dp),
+                        Icons.Filled.KeyboardArrowUp,
+                        contentDescription = "Collapse",
+                        modifier = Modifier.size(18.dp),
                         tint = MaterialTheme.colorScheme.onSurfaceVariant
                     )
                 }
+            }
 
-                // Collapsed: show tool names inline
-                if (!expanded) {
-                    Spacer(Modifier.height(4.dp))
+            // Expanded code block
+            if (expanded) {
+                Box(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(start = 12.dp, end = 12.dp, bottom = 12.dp)
+                        .background(Color(0xFF0D0D0D), RoundedCornerShape(8.dp))
+                        .padding(12.dp)
+                ) {
+                    val codeText = remember(call) { buildCodeBlock(call) }
                     Text(
-                        toolCalls.joinToString(", ") { it.name },
+                        text = codeText,
                         style = MaterialTheme.typography.bodySmall.copy(
                             fontFamily = FontFamily.Monospace,
-                            fontSize = 11.sp
+                            fontSize = 11.sp,
+                            lineHeight = 16.sp
                         ),
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        maxLines = 2,
-                        overflow = TextOverflow.Ellipsis
+                        color = Color(0xFFD4D4D4)
                     )
                 }
-
-                // Expanded: show each tool call with details
-                if (expanded) {
-                    Spacer(Modifier.height(6.dp))
-                    toolCalls.forEachIndexed { index, call ->
-                        if (index > 0) {
-                            HorizontalDivider(
-                                modifier = Modifier.padding(vertical = 6.dp),
-                                color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.4f)
-                            )
-                        }
-                        ToolCallItem(call)
-                    }
-                }
             }
         }
     }
 }
 
+/** Three concentric circles to produce a glow effect around the dot. */
 @Composable
-private fun ToolCallItem(call: ToolCallDto) {
-    val isSuccess = call.status == "success" || call.status == "ok"
-    val isRunning = call.status == "running"
-    val statusIcon = when {
-        isRunning -> Icons.Filled.Build
-        isSuccess -> Icons.Filled.CheckCircle
-        else -> Icons.Filled.Error
-    }
-    val statusColor = when {
-        isRunning -> MaterialTheme.colorScheme.onSurfaceVariant
-        isSuccess -> MaterialTheme.colorScheme.tertiary
-        else -> MaterialTheme.colorScheme.error
-    }
-
-    Column(verticalArrangement = Arrangement.spacedBy(3.dp)) {
-        // Tool name + status
-        Row(
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(4.dp)
-        ) {
-            Icon(
-                statusIcon,
-                contentDescription = call.status,
-                modifier = Modifier.size(12.dp),
-                tint = statusColor
-            )
-            Text(
-                call.name,
-                style = MaterialTheme.typography.labelMedium.copy(
-                    fontFamily = FontFamily.Monospace
-                ),
-                color = MaterialTheme.colorScheme.onSurface
-            )
-        }
-
-        // Arguments (compact)
-        if (!call.arguments.isNullOrEmpty()) {
-            val argsText = call.arguments.entries.joinToString(", ") { (k, v) ->
-                "$k: ${formatArgValue(v)}"
-            }
-            Text(
-                argsText,
-                style = MaterialTheme.typography.bodySmall.copy(
-                    fontFamily = FontFamily.Monospace,
-                    fontSize = 10.sp
-                ),
-                color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.8f),
-                maxLines = 3,
-                overflow = TextOverflow.Ellipsis
-            )
-        }
-
-        // Output (truncated)
-        if (!call.output.isNullOrBlank()) {
-            val truncated = if (call.output.length > 200) {
-                call.output.take(200) + "…"
-            } else call.output
-            Surface(
-                color = MaterialTheme.colorScheme.surfaceContainerHighest,
-                shape = RoundedCornerShape(4.dp)
-            ) {
-                Text(
-                    truncated,
-                    modifier = Modifier.padding(horizontal = 6.dp, vertical = 4.dp),
-                    style = MaterialTheme.typography.bodySmall.copy(
-                        fontFamily = FontFamily.Monospace,
-                        fontSize = 10.sp
-                    ),
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    maxLines = 5,
-                    overflow = TextOverflow.Ellipsis
-                )
-            }
-        }
+private fun GlowDot(color: Color, dotSize: Dp = 12.dp) {
+    Box(contentAlignment = Alignment.Center) {
+        Box(
+            Modifier
+                .size(dotSize + 10.dp)
+                .background(color.copy(alpha = 0.12f), CircleShape)
+        )
+        Box(
+            Modifier
+                .size(dotSize + 4.dp)
+                .background(color.copy(alpha = 0.28f), CircleShape)
+        )
+        Box(
+            Modifier
+                .size(dotSize)
+                .background(color, CircleShape)
+        )
     }
 }
 
-private fun formatArgValue(value: Any?): String = when (value) {
-    is String -> "\"${value.take(50)}${if (value.length > 50) "…" else ""}\""
-    is Map<*, *> -> "{…}"
-    is List<*> -> "[${value.size}]"
-    null -> "null"
-    else -> value.toString().take(30)
+/**
+ * "list_dav_integrations" -> "List dav integrations"
+ * Only the very first letter is uppercased; the rest are lowercase.
+ */
+private fun formatToolName(name: String): String {
+    val words = name.replace('_', ' ').lowercase()
+    return words.replaceFirstChar { it.uppercaseChar() }
+}
+
+private fun buildCodeBlock(call: ToolCallDto): String {
+    val sb = StringBuilder()
+    // Args line
+    sb.appendLine("> ${call.name}")
+    if (!call.arguments.isNullOrEmpty()) {
+        val argsJson = try {
+            JSONObject(call.arguments as Map<*, *>).toString(2)
+        } catch (_: Exception) {
+            call.arguments.entries.joinToString("\n") { (k, v) -> "  $k: $v" }
+        }
+        sb.appendLine(argsJson)
+    }
+    // Output JSON
+    if (!call.output.isNullOrBlank()) {
+        sb.append(prettyJsonOrRaw(call.output))
+    }
+    return sb.toString().trimEnd()
+}
+
+private fun prettyJsonOrRaw(text: String): String = try {
+    JSONObject(text).toString(2)
+} catch (_: Exception) {
+    try { JSONArray(text).toString(2) } catch (_: Exception) { text }
 }

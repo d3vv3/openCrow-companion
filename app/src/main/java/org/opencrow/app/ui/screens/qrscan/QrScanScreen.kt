@@ -10,11 +10,17 @@ import androidx.camera.core.ImageProxy
 import androidx.camera.core.Preview
 import androidx.camera.lifecycle.ProcessCameraProvider
 import androidx.camera.view.PreviewView
+import androidx.compose.foundation.Canvas
+import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalLifecycleOwner
 import androidx.compose.ui.text.style.TextAlign
@@ -54,7 +60,6 @@ fun QrScanScreen(onPaired: () -> Unit) {
         )
     }
 
-    // Navigate when paired
     LaunchedEffect(state.paired) {
         if (state.paired) onPaired()
     }
@@ -68,12 +73,20 @@ fun QrScanScreen(onPaired: () -> Unit) {
             horizontalAlignment = Alignment.CenterHorizontally
         ) {
             Spacer(Modifier.height(spacing.xl))
+
+            // App name
             Text(
                 text = "openCrow",
                 style = MaterialTheme.typography.headlineLarge,
                 color = MaterialTheme.colorScheme.primary
             )
-            Spacer(Modifier.height(spacing.sm))
+            Spacer(Modifier.height(spacing.xs))
+            Text(
+                text = "Pair device",
+                style = MaterialTheme.typography.titleMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+            Spacer(Modifier.height(spacing.md))
             Text(
                 text = "Scan the pairing QR code from your openCrow web UI",
                 style = MaterialTheme.typography.bodyMedium,
@@ -94,49 +107,103 @@ fun QrScanScreen(onPaired: () -> Unit) {
                     modifier = Modifier.weight(1f),
                     contentAlignment = Alignment.Center
                 ) {
-                    Text(
-                        text = "Camera permission is required to scan the QR code.",
-                        style = MaterialTheme.typography.bodyMedium,
-                        color = MaterialTheme.colorScheme.error,
-                        textAlign = TextAlign.Center
-                    )
+                    Surface(
+                        color = MaterialTheme.colorScheme.errorContainer,
+                        shape = RoundedCornerShape(4.dp)
+                    ) {
+                        Text(
+                            text = "Camera permission required to scan the QR code.",
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = MaterialTheme.colorScheme.onErrorContainer,
+                            textAlign = TextAlign.Center,
+                            modifier = Modifier.padding(spacing.md)
+                        )
+                    }
                 }
             } else {
+                // Camera scanner with DESIGN.md corner markers
+                val primaryColor = MaterialTheme.colorScheme.primary
                 Box(
                     modifier = Modifier
-                        .size(280.dp)
-                        .padding(spacing.md),
+                        .size(260.dp)
+                        .clip(RoundedCornerShape(4.dp))
+                        .background(Color.Black),
                     contentAlignment = Alignment.Center
                 ) {
                     QrCameraPreview(
                         scanning = !state.pairing && !state.paired,
                         onQrDetected = viewModel::handleQrScanned
                     )
+
+                    // Corner bracket markers
+                    Canvas(modifier = Modifier.matchParentSize()) {
+                        val len = 32.dp.toPx()
+                        val thick = 3.dp.toPx()
+                        val inset = thick / 2
+
+                        // top-left
+                        drawLine(primaryColor, Offset(inset, inset), Offset(len, inset), thick)
+                        drawLine(primaryColor, Offset(inset, inset), Offset(inset, len), thick)
+                        // top-right
+                        drawLine(primaryColor, Offset(size.width - inset, inset), Offset(size.width - len, inset), thick)
+                        drawLine(primaryColor, Offset(size.width - inset, inset), Offset(size.width - inset, len), thick)
+                        // bottom-left
+                        drawLine(primaryColor, Offset(inset, size.height - inset), Offset(len, size.height - inset), thick)
+                        drawLine(primaryColor, Offset(inset, size.height - inset), Offset(inset, size.height - len), thick)
+                        // bottom-right
+                        drawLine(primaryColor, Offset(size.width - inset, size.height - inset), Offset(size.width - len, size.height - inset), thick)
+                        drawLine(primaryColor, Offset(size.width - inset, size.height - inset), Offset(size.width - inset, size.height - len), thick)
+                    }
+
+                    // Pairing overlay
                     if (state.pairing) {
-                        Surface(
-                            color = MaterialTheme.colorScheme.surface.copy(alpha = 0.8f),
-                            modifier = Modifier.fillMaxSize()
+                        Box(
+                            modifier = Modifier
+                                .matchParentSize()
+                                .background(MaterialTheme.colorScheme.surface.copy(alpha = 0.85f)),
+                            contentAlignment = Alignment.Center
                         ) {
-                            Box(contentAlignment = Alignment.Center) {
-                                Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                                    CircularProgressIndicator(color = MaterialTheme.colorScheme.primary)
-                                    Spacer(Modifier.height(spacing.md))
-                                    Text("Pairing...", style = MaterialTheme.typography.bodyMedium)
-                                }
+                            Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                                CircularProgressIndicator(
+                                    color = MaterialTheme.colorScheme.primary,
+                                    modifier = Modifier.size(32.dp),
+                                    strokeWidth = 2.dp
+                                )
+                                Spacer(Modifier.height(spacing.sm))
+                                Text(
+                                    "Pairing...",
+                                    style = MaterialTheme.typography.bodyMedium,
+                                    color = MaterialTheme.colorScheme.onSurface
+                                )
                             }
                         }
                     }
                 }
+
+                // Helper text below scanner
+                Spacer(Modifier.height(spacing.md))
+                Text(
+                    text = "Position the QR code within the frame",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f),
+                    textAlign = TextAlign.Center
+                )
             }
 
             state.error?.let {
-                Text(
-                    text = it,
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.error,
-                    textAlign = TextAlign.Center,
-                    modifier = Modifier.padding(vertical = spacing.md)
-                )
+                Spacer(Modifier.height(spacing.md))
+                Surface(
+                    color = MaterialTheme.colorScheme.errorContainer,
+                    shape = RoundedCornerShape(4.dp)
+                ) {
+                    Text(
+                        text = it,
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onErrorContainer,
+                        textAlign = TextAlign.Center,
+                        modifier = Modifier.padding(horizontal = spacing.md, vertical = spacing.sm)
+                    )
+                }
             }
             Spacer(Modifier.height(spacing.lg))
         }
@@ -172,14 +239,11 @@ fun QrCameraPreview(scanning: Boolean, onQrDetected: (String) -> Unit) {
                         imageAnalysis.setAnalyzer(ContextCompat.getMainExecutor(ctx)) { imageProxy ->
                             if (scanningState.value) {
                                 val result = decodeQr(imageProxy, reader)
-                                if (result != null) {
-                                    onQrDetected(result)
-                                }
+                                if (result != null) onQrDetected(result)
                             }
                             imageProxy.close()
                         }
                     }
-
                 try {
                     cameraProvider.unbindAll()
                     cameraProvider.bindToLifecycle(
@@ -203,7 +267,6 @@ private fun decodeQr(image: ImageProxy, reader: MultiFormatReader): String? {
     val buffer: ByteBuffer = plane.buffer
     val bytes = ByteArray(buffer.remaining())
     buffer.get(bytes)
-
     val source = PlanarYUVLuminanceSource(
         bytes, image.width, image.height,
         0, 0, image.width, image.height, false
