@@ -1,3 +1,10 @@
+## [1.1.2](https://github.com/d3vv3/openCrow-companion/compare/v1.1.1...v1.1.2) (2026-04-26)
+
+
+### Bug Fixes
+
+* request all permissions on app opening ([76cee09](https://github.com/d3vv3/openCrow-companion/commit/76cee095ec60ab06333cc34e315b02acd9cb972c))
+
 ## [1.1.1](https://github.com/d3vv3/openCrow-companion/compare/v1.1.0...v1.1.1) (2026-04-26)
 
 
