@@ -1,6 +1,7 @@
 package org.opencrow.app.data.local
 
 import android.Manifest
+import android.app.AlarmManager
 import android.app.NotificationChannel
 import android.app.NotificationManager
 import android.app.PendingIntent
@@ -56,8 +57,23 @@ class LocalToolExecutor(
     /**
      * Execute the named local tool with the given arguments (parsed from JSON),
      * then POST the result to the server via /v1/tool-results/{callId}.
+     * Use this for the live SSE path where the server is waiting for the result.
      */
     suspend fun execute(callId: String, toolName: String, args: Map<String, Any>) {
+        val result = executeLocal(toolName, args)
+        try {
+            apiClient.api.postToolResult(callId, ToolResultRequest(result.output, result.isError))
+        } catch (e: Exception) {
+            Log.e(TAG, "Failed to post tool result for callId=$callId", e)
+        }
+    }
+
+    /**
+     * Execute the named local tool and return the result without posting to the server.
+     * Use this for background device task execution (HeartbeatWorker) where there is
+     * no live SSE channel waiting and the caller is responsible for calling completeDeviceTask.
+     */
+    suspend fun executeLocal(toolName: String, args: Map<String, Any>): ToolResult {
         // Strip on_device_ prefix so implementations don't need to know about it
         val name = toolName.removePrefix("on_device_")
         val result = try {
@@ -92,11 +108,7 @@ class LocalToolExecutor(
             ToolResult(output = e.message ?: "Unexpected error", isError = true)
         }
 
-        try {
-            apiClient.api.postToolResult(callId, ToolResultRequest(result.output, result.isError))
-        } catch (e: Exception) {
-            Log.e(TAG, "Failed to post tool result for callId=$callId", e)
-        }
+        return result
     }
 
     // ─── Permission helpers ──────────────────────────────────────────────────
@@ -109,25 +121,47 @@ class LocalToolExecutor(
 
     // ─── Tool Implementations ────────────────────────────────────────────────
 
-    private suspend fun setAlarm(args: Map<String, Any>): ToolResult {
+    private fun setAlarm(args: Map<String, Any>): ToolResult {
         val hour   = (args["hour"] as? Double)?.toInt() ?: (args["hour"] as? Long)?.toInt()
             ?: return ToolResult(output = "Missing required argument: hour", isError = true)
         val minute = (args["minute"] as? Double)?.toInt() ?: (args["minute"] as? Long)?.toInt() ?: 0
-        val label  = args["label"] as? String ?: ""
+        val label  = args["label"] as? String ?: "Alarm"
 
-        // Use AlarmClock.ACTION_SET_ALARM to create an alarm that appears in the system Clock app.
-        // EXTRA_SKIP_UI=true creates it silently without opening the Clock UI.
         return try {
-            val intent = Intent(android.provider.AlarmClock.ACTION_SET_ALARM).apply {
-                putExtra(android.provider.AlarmClock.EXTRA_HOUR, hour)
-                putExtra(android.provider.AlarmClock.EXTRA_MINUTES, minute)
-                if (label.isNotBlank()) putExtra(android.provider.AlarmClock.EXTRA_MESSAGE, label)
-                putExtra(android.provider.AlarmClock.EXTRA_SKIP_UI, true)
-                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+            val alarmManager = context.getSystemService(Context.ALARM_SERVICE) as AlarmManager
+
+            // Compute next occurrence of hour:minute (today if still in future, tomorrow otherwise)
+            val trigger = Calendar.getInstance().apply {
+                set(Calendar.HOUR_OF_DAY, hour)
+                set(Calendar.MINUTE, minute)
+                set(Calendar.SECOND, 0)
+                set(Calendar.MILLISECOND, 0)
+                if (timeInMillis <= System.currentTimeMillis()) {
+                    add(Calendar.DAY_OF_YEAR, 1)
+                }
+            }.timeInMillis
+
+            // Use the label as a unique request code (hash) so different alarms don't cancel each other
+            val requestCode = (label + hour + minute).hashCode()
+            val receiverIntent = Intent(context, AlarmReceiver::class.java).apply {
+                putExtra(AlarmReceiver.EXTRA_LABEL, label)
             }
-            withContext(Dispatchers.Main) { context.startActivity(intent) }
+            val pendingIntent = PendingIntent.getBroadcast(
+                context,
+                requestCode,
+                receiverIntent,
+                PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+            )
+
+            // On API 31+ check if we have exact alarm permission; fall back to inexact if not
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S && !alarmManager.canScheduleExactAlarms()) {
+                alarmManager.setAndAllowWhileIdle(AlarmManager.RTC_WAKEUP, trigger, pendingIntent)
+            } else {
+                alarmManager.setExactAndAllowWhileIdle(AlarmManager.RTC_WAKEUP, trigger, pendingIntent)
+            }
+
             val timeStr = "%02d:%02d".format(hour, minute)
-            ToolResult(output = "Alarm set for $timeStr${if (label.isNotBlank()) " -- $label" else ""}")
+            ToolResult(output = "Alarm set for $timeStr${if (label != "Alarm") " -- $label" else ""}")
         } catch (e: Exception) {
             ToolResult(output = "Failed to set alarm: ${e.message}", isError = true)
         }
@@ -230,10 +264,12 @@ class LocalToolExecutor(
             return ToolResult(output = "WRITE_CALENDAR permission denied. Cannot create calendar event.", isError = true)
         }
 
-        // Find the primary/default calendar for this account
-        val calendarId: Long = withContext(Dispatchers.IO) {
+        // Find the primary/default writable calendar
+        data class CalInfo(val id: Long, val name: String)
+        val calInfo: CalInfo? = withContext(Dispatchers.IO) {
             val projection = arrayOf(
                 CalendarContract.Calendars._ID,
+                CalendarContract.Calendars.CALENDAR_DISPLAY_NAME,
                 CalendarContract.Calendars.IS_PRIMARY,
                 CalendarContract.Calendars.CALENDAR_ACCESS_LEVEL
             )
@@ -244,17 +280,18 @@ class LocalToolExecutor(
                 null,
                 "${CalendarContract.Calendars.IS_PRIMARY} DESC"
             )
-            var id = -1L
+            var result: CalInfo? = null
             cursor?.use {
                 if (it.moveToFirst()) {
-                    id = it.getLong(it.getColumnIndexOrThrow(CalendarContract.Calendars._ID))
+                    val id   = it.getLong(it.getColumnIndexOrThrow(CalendarContract.Calendars._ID))
+                    val name = it.getString(it.getColumnIndexOrThrow(CalendarContract.Calendars.CALENDAR_DISPLAY_NAME)) ?: "unknown"
+                    result = CalInfo(id, name)
                 }
             }
-            id
+            result
         }
 
-        if (calendarId == -1L) {
-            // No writable calendar found - notify the user so they can configure one.
+        if (calInfo == null) {
             showNoCalendarNotification()
             return ToolResult(
                 output = "No writable calendar found on this device. " +
@@ -269,7 +306,7 @@ class LocalToolExecutor(
         return withContext(Dispatchers.IO) {
             try {
                 val values = ContentValues().apply {
-                    put(CalendarContract.Events.CALENDAR_ID,    calendarId)
+                    put(CalendarContract.Events.CALENDAR_ID,    calInfo.id)
                     put(CalendarContract.Events.TITLE,          title)
                     put(CalendarContract.Events.DTSTART,        startMs)
                     put(CalendarContract.Events.DTEND,          endMs)
@@ -279,9 +316,9 @@ class LocalToolExecutor(
                 }
                 val uri = context.contentResolver.insert(CalendarContract.Events.CONTENT_URI, values)
                 if (uri != null) {
-                    ToolResult(output = "Calendar event '$title' created successfully (id=${uri.lastPathSegment})")
+                    ToolResult(output = "Calendar event '$title' created on '${calInfo.name}' (id=${uri.lastPathSegment})")
                 } else {
-                    ToolResult(output = "Failed to create calendar event: ContentResolver returned null URI", isError = true)
+                    ToolResult(output = "Failed to create calendar event on '${calInfo.name}': ContentResolver returned null URI", isError = true)
                 }
             } catch (e: Exception) {
                 ToolResult(output = "Failed to create calendar event: ${e.message}", isError = true)
@@ -294,7 +331,7 @@ class LocalToolExecutor(
             return ToolResult(output = "READ_CONTACTS permission denied.", isError = true)
         }
         val query = args["query"] as? String ?: ""
-        val limit = (args["limit"] as? Double)?.toInt() ?: 10
+        val limit = (args["limit"] as? Double)?.toInt() ?: 30
         val results = mutableListOf<String>()
         val uri = if (query.isNotBlank()) {
             Uri.withAppendedPath(ContactsContract.CommonDataKinds.Phone.CONTENT_FILTER_URI, Uri.encode(query))

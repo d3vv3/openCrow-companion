@@ -49,7 +49,8 @@ class HeartbeatWorker(
             val toolTasks    = tasks.filter { it.toolName != null }
             val promptTasks  = tasks.filter { it.toolName == null }
 
-            for (task in toolTasks) {
+            // Execute each tool task and collect human-readable outcomes for the LLM
+            val executedTaskSummaries = toolTasks.map { task ->
                 executeLocalTask(apiClient, task)
             }
 
@@ -70,10 +71,31 @@ class HeartbeatWorker(
             val dateTime = SimpleDateFormat("EEEE, MMMM d, yyyy 'at' HH:mm z", Locale.getDefault())
                 .format(Date())
 
-            val taskPrompt = buildTaskPrompt(promptTasks)
+            val taskPrompt = buildTaskPrompt(promptTasks, executedTaskSummaries)
             val heartbeatMessage = buildHeartbeatPrompt(dateTime, calendarPrompt, taskPrompt, serverPromptTemplate)
 
-            val response = sendHeartbeatChat(apiClient, heartbeatMessage)
+            val (response, convId) = sendHeartbeatChat(apiClient, heartbeatMessage)
+
+            // ── 4. Record executed tool calls into the heartbeat conversation ─
+            if (convId != null) {
+                toolTasks.zip(executedTaskSummaries).forEach { (task, summary) ->
+                    try {
+                        val isError = summary.startsWith(":x:")
+                        apiClient.api.recordToolCall(
+                            convId,
+                            RecordToolCallRequest(
+                                name = task.toolName ?: "unknown",
+                                arguments = task.toolArguments,
+                                output = if (isError) "" else summary,
+                                error = if (isError) summary else "",
+                                source = "device"
+                            )
+                        )
+                    } catch (e: Exception) {
+                        Log.w(TAG, "Failed to record tool call for conversation $convId: ${e.message}")
+                    }
+                }
+            }
 
             if (response != null && response.trim() != "HEARTBEAT_OK") {
                 Log.i(TAG, "Heartbeat action needed: $response")
@@ -120,10 +142,15 @@ class HeartbeatWorker(
     }
 
     /**
-     * Executes a task whose [toolName] + [toolArguments] are set on the server side.
+     * Executes a background device task whose [toolName] + [toolArguments] are set on the server.
+     * Uses [LocalToolExecutor.executeLocal] to avoid posting a tool-result to the live SSE channel
+     * (there is no live session during background heartbeat). Reports success/failure directly via
+     * [completeDeviceTask].
+     *
+     * @return A human-readable description of what was executed and the outcome.
      */
-    private suspend fun executeLocalTask(apiClient: ApiClient, task: DeviceTaskDto) {
-        val toolName = task.toolName ?: return
+    private suspend fun executeLocalTask(apiClient: ApiClient, task: DeviceTaskDto): String {
+        val toolName = task.toolName ?: return ""
         val args     = task.toolArguments ?: emptyMap()
 
         val executor = LocalToolExecutor(
@@ -135,14 +162,16 @@ class HeartbeatWorker(
             }
         )
 
-        try {
-            executor.execute(callId = task.id, toolName = toolName, args = args)
+        return try {
+            val result = executor.executeLocal(toolName, args)
             try {
                 apiClient.api.completeDeviceTask(
                     task.id,
-                    CompleteDeviceTaskRequest(success = true, output = "executed via local tool executor")
+                    CompleteDeviceTaskRequest(success = !result.isError, output = result.output)
                 )
             } catch (_: Exception) {}
+            if (result.isError) ":x: $toolName failed: ${result.output}"
+            else ":white_check_mark: $toolName: ${result.output}"
         } catch (e: Exception) {
             Log.e(TAG, "Local tool task ${task.id} failed", e)
             try {
@@ -151,6 +180,7 @@ class HeartbeatWorker(
                     CompleteDeviceTaskRequest(success = false, output = e.message ?: "error")
                 )
             } catch (_: Exception) {}
+            ":x: $toolName error: ${e.message}"
         }
     }
 
@@ -227,13 +257,21 @@ class HeartbeatWorker(
         }
     }
 
-    private fun buildTaskPrompt(tasks: List<DeviceTaskDto>): String {
-        return if (tasks.isEmpty()) {
-            "No pending tasks detected."
-        } else {
-            "Here are the list of tasks that are pending:\n" +
-                    tasks.joinToString("\n") { "- [${it.id}] ${it.instruction}" }
+    private fun buildTaskPrompt(tasks: List<DeviceTaskDto>, executedSummaries: List<String> = emptyList()): String {
+        val parts = mutableListOf<String>()
+        if (executedSummaries.isNotEmpty()) {
+            parts.add(
+                "The following device actions were automatically executed during this heartbeat:\n" +
+                    executedSummaries.joinToString("\n") { "  $it" }
+            )
         }
+        if (tasks.isNotEmpty()) {
+            parts.add(
+                "Pending tasks requiring your attention:\n" +
+                    tasks.joinToString("\n") { "- [${it.id}] ${it.instruction}" }
+            )
+        }
+        return if (parts.isEmpty()) "No pending tasks detected." else parts.joinToString("\n\n")
     }
 
     private fun buildHeartbeatPrompt(
@@ -264,19 +302,20 @@ HEARTBEAT_OK
 If anything needs attention, respond concisely with what changed and what action is recommended."""
     }
 
-    private suspend fun sendHeartbeatChat(apiClient: ApiClient, message: String): String? {
+    private suspend fun sendHeartbeatChat(apiClient: ApiClient, message: String): Pair<String?, String?> {
         return try {
             val convResp = apiClient.api.createConversation(
                 CreateConversationRequest("[Heartbeat] ${SimpleDateFormat("yyyy-MM-dd HH:mm", Locale.getDefault()).format(Date())}")
             )
-            if (!convResp.isSuccessful) return null
+            if (!convResp.isSuccessful) return Pair(null, null)
             val convId = convResp.body()!!.id
 
             val completeResp = apiClient.api.complete(CompleteRequest(convId, message))
-            if (completeResp.isSuccessful) completeResp.body()?.output else null
+            val output = if (completeResp.isSuccessful) completeResp.body()?.output else null
+            Pair(output, convId)
         } catch (e: Exception) {
             Log.e(TAG, "Heartbeat chat failed", e)
-            null
+            Pair(null, null)
         }
     }
 

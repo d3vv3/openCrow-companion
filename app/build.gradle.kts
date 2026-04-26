@@ -24,13 +24,30 @@ android {
             keyAlias = "androiddebugkey"
             keyPassword = "android"
         }
+        create("releaseKey") {
+            val keystorePath = System.getenv("RELEASE_KEYSTORE_PATH")
+            val keystorePassword = System.getenv("RELEASE_KEYSTORE_PASSWORD")
+            val releaseKeyAlias = System.getenv("RELEASE_KEY_ALIAS")
+            val releaseKeyPassword = System.getenv("RELEASE_KEY_PASSWORD")
+            if (keystorePath != null) {
+                storeFile = file(keystorePath)
+                storePassword = keystorePassword
+                keyAlias = releaseKeyAlias
+                keyPassword = releaseKeyPassword
+            }
+        }
     }
 
     buildTypes {
         release {
             isMinifyEnabled = true
             isShrinkResources = true
-            signingConfig = signingConfigs.getByName("debugKey")
+            val hasReleaseKey = System.getenv("RELEASE_KEYSTORE_PATH") != null
+            signingConfig = if (hasReleaseKey) {
+                signingConfigs.getByName("releaseKey")
+            } else {
+                signingConfigs.getByName("debugKey")
+            }
             proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro")
         }
     }

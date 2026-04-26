@@ -82,7 +82,7 @@ object LocalToolCapabilities {
                 "type" to "object",
                 "properties" to mapOf(
                     "query" to mapOf("type" to "string",  "description" to "Search query (optional, returns all if omitted)"),
-                    "limit" to mapOf("type" to "integer", "description" to "Maximum number of results (default 10)")
+                    "limit" to mapOf("type" to "integer", "description" to "Maximum number of results (default 30)")
                 ),
                 "required" to listOf<String>()
             )

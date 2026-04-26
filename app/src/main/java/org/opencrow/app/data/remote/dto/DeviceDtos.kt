@@ -37,6 +37,16 @@ data class CompleteDeviceTaskRequest(val success: Boolean, val output: String)
 // ─── Local Tool Results ───
 data class ToolResultRequest(val output: String, val isError: Boolean = false)
 
+// ─── Record Tool Call (device -> conversation) ───
+data class RecordToolCallRequest(
+    val name: String,
+    val arguments: Map<String, Any>? = null,
+    val output: String = "",
+    val error: String = "",
+    val durationMs: Long = 0,
+    val source: String = "device"
+)
+
 // ─── Heartbeat Config ───
 data class HeartbeatConfigDto(
     val userId: String?,

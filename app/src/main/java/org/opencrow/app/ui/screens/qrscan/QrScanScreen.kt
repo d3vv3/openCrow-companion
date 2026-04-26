@@ -32,6 +32,7 @@ import androidx.lifecycle.viewmodel.compose.viewModel
 import com.google.zxing.*
 import com.google.zxing.common.HybridBinarizer
 import org.opencrow.app.OpenCrowApp
+import org.opencrow.app.heartbeat.HeartbeatScheduler
 import org.opencrow.app.ui.theme.LocalSpacing
 import java.nio.ByteBuffer
 
@@ -62,7 +63,10 @@ fun QrScanScreen(onPaired: () -> Unit) {
     }
 
     LaunchedEffect(state.paired) {
-        if (state.paired) onPaired()
+        if (state.paired) {
+            HeartbeatScheduler.schedule(context, 15)
+            onPaired()
+        }
     }
 
     Scaffold(containerColor = MaterialTheme.colorScheme.background) { padding ->
