@@ -280,6 +280,28 @@ object LocalToolCapabilities {
             )
         ),
         DeviceCapability(
+            name = "list_alarms",
+            description = "List all alarms currently set on the device",
+            parameters = mapOf(
+                "type" to "object",
+                "properties" to emptyMap<String, Any>(),
+                "required" to listOf<String>()
+            )
+        ),
+        DeviceCapability(
+            name = "delete_alarm",
+            description = "Delete a specific alarm from the device by matching hour, minute, and optionally label",
+            parameters = mapOf(
+                "type" to "object",
+                "properties" to mapOf(
+                    "hour"   to mapOf("type" to "integer", "description" to "Hour of the alarm to delete (24h format)"),
+                    "minute" to mapOf("type" to "integer", "description" to "Minute of the alarm to delete"),
+                    "label"  to mapOf("type" to "string",  "description" to "Optional label to match for more precise deletion")
+                ),
+                "required" to listOf("hour", "minute")
+            )
+        ),
+        DeviceCapability(
             name = "start_stopwatch",
             description = "Start the stopwatch on the user's device",
             parameters = mapOf(

@@ -105,6 +105,8 @@ class LocalToolExecutor(
                 "media_control"         -> mediaControl(args)
                 "start_timer"           -> startTimer(args)
                 "start_stopwatch"       -> startStopwatch()
+                "list_alarms"           -> listAlarms()
+                "delete_alarm"          -> deleteAlarm(args)
                 else                    -> ToolResult(output = "Unknown local tool: $toolName", isError = true)
             }
         } catch (e: Exception) {
@@ -784,6 +786,50 @@ class LocalToolExecutor(
             }
         }
         return ToolResult(output = "No clock app found to open stopwatch", isError = true)
+    }
+
+    private fun listAlarms(): ToolResult {
+        // Query the AOSP DeskClock content provider (works on AOSP + most OEM roms)
+        val uri = android.net.Uri.parse("content://com.android.deskclock/alarm")
+        return try {
+            val cursor = context.contentResolver.query(uri, null, null, null, null)
+                ?: return ToolResult(output = "[]") // provider not available -> return empty
+            val alarms = mutableListOf<Map<String, Any?>>()
+            cursor.use {
+                while (it.moveToNext()) {
+                    val row = mutableMapOf<String, Any?>()
+                    for (col in it.columnNames) {
+                        row[col] = try { it.getString(it.getColumnIndexOrThrow(col)) } catch (_: Exception) { null }
+                    }
+                    alarms.add(row)
+                }
+            }
+            val json = org.json.JSONArray(alarms.map { org.json.JSONObject(it) }).toString()
+            ToolResult(output = json)
+        } catch (e: Exception) {
+            Log.w(TAG, "listAlarms: content provider unavailable: ${e.message}")
+            ToolResult(output = "[]") // not an error -- just no access
+        }
+    }
+
+    private fun deleteAlarm(args: Map<String, Any>): ToolResult {
+        val hour   = (args["hour"]   as? Number)?.toInt() ?: return ToolResult(output = "Missing hour", isError = true)
+        val minute = (args["minute"] as? Number)?.toInt() ?: 0
+        val label  = args["label"]  as? String
+
+        val intent = Intent(android.provider.AlarmClock.ACTION_DISMISS_ALARM).apply {
+            putExtra(android.provider.AlarmClock.EXTRA_HOUR, hour)
+            putExtra(android.provider.AlarmClock.EXTRA_MINUTES, minute)
+            if (label != null) putExtra(android.provider.AlarmClock.EXTRA_MESSAGE, label)
+            putExtra(android.provider.AlarmClock.EXTRA_SKIP_UI, true)
+            addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+        }
+        return try {
+            context.startActivity(intent)
+            ToolResult(output = "Alarm at %02d:%02d deleted".format(hour, minute))
+        } catch (e: android.content.ActivityNotFoundException) {
+            ToolResult(output = "No alarm app found to handle delete request", isError = true)
+        }
     }
 
     // ─── Notification channels ───────────────────────────────────────────────
