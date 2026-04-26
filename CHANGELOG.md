@@ -1,3 +1,10 @@
+# [1.1.0](https://github.com/d3vv3/openCrow-companion/compare/v1.0.0...v1.1.0) (2026-04-26)
+
+
+### Features
+
+* Add TTS support, fix alarms ([04b5ec9](https://github.com/d3vv3/openCrow-companion/commit/04b5ec96bb4541779193fb59d7f036d8583ca3b3))
+
 # 1.0.0 (2026-04-26)
 
 
