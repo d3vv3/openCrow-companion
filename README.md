@@ -1,4 +1,3 @@
-# openCrow companion app
 <p align="center">
   <img src="./crow-animated.svg" alt="openCrow" width="200" />
   <br/>
@@ -6,8 +5,6 @@
   <br/>
   <i>Android companion app for the <a href="https://github.com/d3vv3/openCrow">openCrow</a> self-hosted AI assistant platform.</i>
 </p>
-
-Android companion app for the [openCrow](https://github.com/d3vv3/openCrow) self-hosted AI assistant platform.
 
 ## Architecture
 
