@@ -20,6 +20,7 @@ import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
+import androidx.compose.ui.draw.alpha
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
@@ -27,6 +28,8 @@ import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Fullscreen
 import androidx.compose.material.icons.filled.Mic
 import androidx.compose.material.icons.filled.Send
+import androidx.compose.material.icons.filled.VolumeOff
+import androidx.compose.material.icons.filled.VolumeUp
 import androidx.compose.material.icons.outlined.Screenshot
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
@@ -220,7 +223,10 @@ fun AssistScreen(
                     AssistHeader(
                         onDismiss = onDismiss,
                         onOpenFullScreen = { onOpenFullScreen(state.conversationId) },
-                        showControls = state.messages.isNotEmpty()
+                        showControls = state.messages.isNotEmpty(),
+                        ttsEnabled = state.ttsEnabled,
+                        ttsAvailable = state.ttsAvailable,
+                        onToggleTts = { viewModel.toggleTts() }
                     )
 
                     if (!state.apiReady) {
@@ -245,7 +251,7 @@ fun AssistScreen(
                                     .heightIn(max = 400.dp)
                                     .weight(1f, fill = false)
                                     .padding(horizontal = spacing.md),
-                                contentPadding = PaddingValues(vertical = spacing.sm),
+                                contentPadding = PaddingValues(top = spacing.sm, bottom = spacing.xl),
                                 verticalArrangement = Arrangement.spacedBy(spacing.lg)
                             ) {
                                 val attachmentsMap = state.attachmentsByMessageId
@@ -326,7 +332,10 @@ private fun ScreenshotPreview(path: String) {
 private fun AssistHeader(
     onDismiss: () -> Unit,
     onOpenFullScreen: () -> Unit,
-    showControls: Boolean
+    showControls: Boolean,
+    ttsEnabled: Boolean,
+    ttsAvailable: Boolean,
+    onToggleTts: () -> Unit
 ) {
     val spacing = LocalSpacing.current
     Column(
@@ -370,23 +379,40 @@ private fun AssistHeader(
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .padding(end = spacing.xs),
-                horizontalArrangement = Arrangement.End,
+                    .padding(horizontal = spacing.xs),
+                horizontalArrangement = Arrangement.SpaceBetween,
                 verticalAlignment = Alignment.CenterVertically
             ) {
-                IconButton(onClick = onOpenFullScreen) {
+                // TTS toggle on the left
+                IconButton(
+                    onClick = onToggleTts,
+                    modifier = Modifier
+                        .then(if (!ttsAvailable) Modifier.alpha(0.38f) else Modifier)
+                ) {
                     Icon(
-                        Icons.Filled.Fullscreen,
-                        contentDescription = "Open full screen",
-                        tint = MaterialTheme.colorScheme.onSurfaceVariant
+                        if (ttsEnabled) Icons.Filled.VolumeUp else Icons.Filled.VolumeOff,
+                        contentDescription = if (ttsEnabled) "Disable TTS" else "Enable TTS",
+                        tint = if (ttsEnabled) MaterialTheme.colorScheme.primary
+                               else MaterialTheme.colorScheme.onSurfaceVariant
                     )
                 }
-                IconButton(onClick = onDismiss) {
-                    Icon(
-                        Icons.Default.Close,
-                        contentDescription = "Close",
-                        tint = MaterialTheme.colorScheme.onSurfaceVariant
-                    )
+
+                // Fullscreen + close on the right
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    IconButton(onClick = onOpenFullScreen) {
+                        Icon(
+                            Icons.Filled.Fullscreen,
+                            contentDescription = "Open full screen",
+                            tint = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+                    IconButton(onClick = onDismiss) {
+                        Icon(
+                            Icons.Default.Close,
+                            contentDescription = "Close",
+                            tint = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
                 }
             }
         }

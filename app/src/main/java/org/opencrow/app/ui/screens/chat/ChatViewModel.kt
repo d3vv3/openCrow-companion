@@ -91,6 +91,8 @@ class ChatViewModel(
 
     companion object {
         private const val TAG = "ChatVM"
+        const val PREFS_NAME = "opencrow_tts"
+        const val PREF_TTS_ENABLED = "tts_enabled"
     }
 
     private val _uiState = MutableStateFlow(ChatUiState())
@@ -131,6 +133,9 @@ class ChatViewModel(
     // ────────────────────────────────────────────────────────────────────────
 
     init {
+        // Restore persisted TTS preference
+        val prefs = appContext.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+        _uiState.update { it.copy(ttsEnabled = prefs.getBoolean(PREF_TTS_ENABLED, false)) }
         loadConversations()
         observeRefreshSignal()
         observeActiveStream()
@@ -929,7 +934,20 @@ class ChatViewModel(
     }
 
     fun toggleTts() {
-        _uiState.update { it.copy(ttsEnabled = !it.ttsEnabled) }
+        val wasEnabled = _uiState.value.ttsEnabled
+        val newEnabled = !wasEnabled
+        _uiState.update { it.copy(ttsEnabled = newEnabled) }
+        // Persist the preference
+        appContext.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+            .edit().putBoolean(PREF_TTS_ENABLED, newEnabled).apply()
+        // If TTS was just turned off, stop any currently playing audio immediately.
+        if (wasEnabled) {
+            mediaPlayer?.let { mp ->
+                if (mp.isPlaying) mp.stop()
+                mp.release()
+            }
+            mediaPlayer = null
+        }
     }
 
     fun speakText(text: String) {

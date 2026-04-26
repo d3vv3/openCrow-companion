@@ -2,6 +2,7 @@ package org.opencrow.app.ui.screens.assist
 
 import android.content.Context
 import android.graphics.BitmapFactory
+import android.media.MediaPlayer
 import android.media.MediaRecorder
 import android.os.Build
 import android.util.Base64
@@ -10,6 +11,7 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.viewModelScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -25,6 +27,7 @@ import org.opencrow.app.data.repository.ConfigRepository
 import org.opencrow.app.data.repository.ConversationRepository
 import org.opencrow.app.di.ActiveStreamState
 import org.opencrow.app.ui.screens.chat.Attachment
+import org.opencrow.app.ui.screens.chat.ChatViewModel
 import java.io.ByteArrayOutputStream
 import java.io.File
 import java.text.SimpleDateFormat
@@ -44,7 +47,9 @@ data class AssistUiState(
     val recording: Boolean = false,
     val transcribing: Boolean = false,
     val attachmentsByMessageId: Map<String, List<Attachment>> = emptyMap(),
-    val pendingPermission: String? = null
+    val pendingPermission: String? = null,
+    val ttsEnabled: Boolean = false,
+    val ttsAvailable: Boolean = false
 )
 
 class AssistViewModel(
@@ -61,6 +66,7 @@ class AssistViewModel(
     val uiState: StateFlow<AssistUiState> = _uiState.asStateFlow()
 
     private val streamingBuffer = StringBuilder()
+    private var mediaPlayer: MediaPlayer? = null
 
     // ─── Runtime permission helpers ──────────────────────────────────────────
     private var permissionDeferred: kotlinx.coroutines.CompletableDeferred<Boolean>? = null
@@ -85,7 +91,11 @@ class AssistViewModel(
     private var audioFile: File? = null
 
     init {
+        // Restore persisted TTS preference
+        val prefs = appContext.getSharedPreferences(ChatViewModel.PREFS_NAME, Context.MODE_PRIVATE)
+        _uiState.update { it.copy(ttsEnabled = prefs.getBoolean(ChatViewModel.PREF_TTS_ENABLED, false)) }
         checkApiReady()
+        pollTtsStatus()
     }
 
 
@@ -102,13 +112,65 @@ class AssistViewModel(
         }
     }
 
+    private fun pollTtsStatus() {
+        viewModelScope.launch {
+            while (true) {
+                try {
+                    val available = repository.checkTtsStatus()
+                    _uiState.update { it.copy(ttsAvailable = available) }
+                } catch (_: Exception) {
+                    _uiState.update { it.copy(ttsAvailable = false) }
+                }
+                delay(10_000)
+            }
+        }
+    }
+
+    fun toggleTts() {
+        val wasEnabled = _uiState.value.ttsEnabled
+        val newEnabled = !wasEnabled
+        _uiState.update { it.copy(ttsEnabled = newEnabled) }
+        appContext.getSharedPreferences(ChatViewModel.PREFS_NAME, Context.MODE_PRIVATE)
+            .edit().putBoolean(ChatViewModel.PREF_TTS_ENABLED, newEnabled).apply()
+        if (wasEnabled) {
+            mediaPlayer?.let { mp ->
+                if (mp.isPlaying) mp.stop()
+                mp.release()
+            }
+            mediaPlayer = null
+        }
+    }
+
+    fun speakText(text: String) {
+        viewModelScope.launch(Dispatchers.IO) {
+            try {
+                val bytes = repository.synthesizeSpeech(text) ?: return@launch
+                val tmpFile = File(appContext.cacheDir, "assist_tts_${System.currentTimeMillis()}.mp3")
+                tmpFile.writeBytes(bytes)
+                withContext(Dispatchers.Main) {
+                    mediaPlayer?.release()
+                    mediaPlayer = MediaPlayer().apply {
+                        setDataSource(tmpFile.absolutePath)
+                        prepare()
+                        start()
+                        setOnCompletionListener { tmpFile.delete() }
+                    }
+                }
+            } catch (e: Exception) {
+                Log.e(TAG, "TTS playback failed", e)
+            }
+        }
+    }
+
     fun resetConversation() {
-        // Clear all conversation state so the next message starts fresh
+        // Clear all conversation state so the next message starts fresh -- preserve TTS settings
         _uiState.update { current ->
             AssistUiState(
                 apiReady = current.apiReady,
                 screenshotPath = current.screenshotPath,
-                screenshotAvailable = current.screenshotAvailable
+                screenshotAvailable = current.screenshotAvailable,
+                ttsEnabled = current.ttsEnabled,
+                ttsAvailable = current.ttsAvailable
             )
         }
         streamingBuffer.clear()
@@ -310,6 +372,10 @@ class AssistViewModel(
                                 isStreaming = false
                             )
                             app.container.activeStream.value = null
+                            // Speak the response if TTS is enabled
+                            if (_uiState.value.ttsEnabled && event.output.isNotBlank()) {
+                                speakText(event.output)
+                            }
                         }
                         is StreamEvent.Error -> {
                             streamingBuffer.clear()
@@ -429,6 +495,7 @@ class AssistViewModel(
     override fun onCleared() {
         super.onCleared()
         try { mediaRecorder?.release() } catch (_: Exception) {}
+        try { mediaPlayer?.release() } catch (_: Exception) {}
     }
 
     class Factory(
