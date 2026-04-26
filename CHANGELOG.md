@@ -1,3 +1,10 @@
+## [1.1.1](https://github.com/d3vv3/openCrow-companion/compare/v1.1.0...v1.1.1) (2026-04-26)
+
+
+### Bug Fixes
+
+* Multilingual TTS support ([0328bc7](https://github.com/d3vv3/openCrow-companion/commit/0328bc79184ec0c8be6ee64911cfa7b3eaa08928))
+
 # [1.1.0](https://github.com/d3vv3/openCrow-companion/compare/v1.0.0...v1.1.0) (2026-04-26)
 
 
