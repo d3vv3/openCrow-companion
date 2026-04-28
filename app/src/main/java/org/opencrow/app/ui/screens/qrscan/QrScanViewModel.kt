@@ -1,10 +1,12 @@
 package org.opencrow.app.ui.screens.qrscan
 
+import android.app.Application
 import android.util.Log
-import androidx.lifecycle.ViewModel
+import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.viewModelScope
 import com.google.gson.Gson
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -14,18 +16,21 @@ import org.opencrow.app.data.local.LocalToolCapabilities
 import org.opencrow.app.data.remote.ApiClient
 import org.opencrow.app.data.remote.dto.QrPayload
 import org.opencrow.app.data.remote.dto.RegisterDeviceRequest
+import org.unifiedpush.android.connector.UnifiedPush
 
 data class QrScanUiState(
     val hasCameraPermission: Boolean = false,
     val permissionsRequested: Boolean = false,
     val error: String? = null,
+    val status: String? = null,
     val pairing: Boolean = false,
     val paired: Boolean = false
 )
 
 class QrScanViewModel(
+    application: Application,
     private val apiClient: ApiClient
-) : ViewModel() {
+) : AndroidViewModel(application) {
 
     companion object {
         private const val TAG = "QrScanVM"
@@ -42,7 +47,7 @@ class QrScanViewModel(
 
     fun handleQrScanned(raw: String) {
         if (_uiState.value.pairing) return
-        _uiState.update { it.copy(pairing = true, error = null) }
+        _uiState.update { it.copy(pairing = true, error = null, status = "Validating pairing...") }
 
         viewModelScope.launch {
             try {
@@ -60,6 +65,8 @@ class QrScanViewModel(
                 apiClient.saveTokens(
                     payload.server, payload.accessToken, payload.refreshToken, payload.id
                 )
+
+                _uiState.update { it.copy(status = "Checking server connection...") }
 
                 // Check server is reachable
                 val healthResp = try {
@@ -95,9 +102,13 @@ class QrScanViewModel(
                     return@launch
                 }
 
-                // Register device capabilities
+                _uiState.update { it.copy(status = "Registering device...") }
+
+                // Register device capabilities, including any already-stored push endpoint
+                // (endpoint may have been assigned by UP during onboarding, before pairing)
+                val storedPushEndpoint = apiClient.getPushEndpoint() ?: ""
                 val registerResp = try {
-                    apiClient.api.registerDevice(payload.id, RegisterDeviceRequest(LocalToolCapabilities.all))
+                    registerDevice(payload.id, storedPushEndpoint.ifEmpty { null })
                 } catch (e: Exception) {
                     Log.e(TAG, "Device register failed: ${e.message}", e)
                     _uiState.update {
@@ -112,18 +123,95 @@ class QrScanViewModel(
                     return@launch
                 }
 
-                _uiState.update { it.copy(paired = true, pairing = false) }
+                // If UP is already configured, re-register with the new device ID so
+                // onNewEndpoint fires and the push endpoint is recorded for this device.
+                val savedDistributor = UnifiedPush.getSavedDistributor(getApplication())
+                if (!savedDistributor.isNullOrEmpty()) {
+                    if (storedPushEndpoint.isNotEmpty()) {
+                        Log.i(TAG, "Using stored UP endpoint during pairing for device ${payload.id}")
+                    } else {
+                        _uiState.update {
+                            it.copy(status = "Waiting for push endpoint from $savedDistributor...")
+                        }
+                        Log.i(TAG, "Waiting for UP endpoint for new device ID ${payload.id} (distributor=$savedDistributor)")
+                        UnifiedPush.register(getApplication(), payload.id)
+
+                        val pushEndpoint = waitForPushEndpoint(timeoutMillis = 15000L)
+                        if (pushEndpoint.isNullOrEmpty()) {
+                            Log.w(TAG, "Timed out waiting for UP endpoint for device ${payload.id}")
+                            _uiState.update {
+                                it.copy(
+                                    paired = true,
+                                    pairing = false,
+                                    error = "Device paired, but push setup timed out. Open your push distributor and try again, or ask the assistant to configure push later.",
+                                    status = null
+                                )
+                            }
+                            return@launch
+                        }
+
+                        _uiState.update { it.copy(status = "Saving push endpoint...") }
+                        val pushRegisterResp = try {
+                            registerDevice(payload.id, pushEndpoint)
+                        } catch (e: Exception) {
+                            Log.e(TAG, "Push endpoint register failed: ${e.message}", e)
+                            _uiState.update {
+                                it.copy(
+                                    paired = true,
+                                    pairing = false,
+                                    error = "Device paired, but saving the push endpoint failed: ${e.message}",
+                                    status = null
+                                )
+                            }
+                            return@launch
+                        }
+                        if (!pushRegisterResp.isSuccessful) {
+                            _uiState.update {
+                                it.copy(
+                                    paired = true,
+                                    pairing = false,
+                                    error = "Device paired, but saving the push endpoint failed (${pushRegisterResp.code()})",
+                                    status = null
+                                )
+                            }
+                            return@launch
+                        }
+                    }
+                }
+
+                _uiState.update { it.copy(paired = true, pairing = false, status = null) }
             } catch (e: Exception) {
                 Log.e(TAG, "Pairing failed", e)
-                _uiState.update { it.copy(error = "Pairing failed: ${e.message}", pairing = false) }
+                _uiState.update { it.copy(error = "Pairing failed: ${e.message}", pairing = false, status = null) }
             }
         }
     }
 
-    class Factory(private val apiClient: ApiClient) : ViewModelProvider.Factory {
+    private suspend fun registerDevice(deviceId: String, pushEndpoint: String?) =
+        apiClient.api.registerDevice(
+            deviceId,
+            RegisterDeviceRequest(
+                capabilities = LocalToolCapabilities.all,
+                pushEndpoint = pushEndpoint
+            )
+        )
+
+    private suspend fun waitForPushEndpoint(timeoutMillis: Long): String? {
+        val startedAt = System.currentTimeMillis()
+        while (System.currentTimeMillis() - startedAt < timeoutMillis) {
+            val endpoint = apiClient.getPushEndpoint()
+            if (!endpoint.isNullOrEmpty()) {
+                return endpoint
+            }
+            delay(500)
+        }
+        return null
+    }
+
+    class Factory(private val application: Application, private val apiClient: ApiClient) : ViewModelProvider.Factory {
         @Suppress("UNCHECKED_CAST")
-        override fun <T : ViewModel> create(modelClass: Class<T>): T {
-            return QrScanViewModel(apiClient) as T
+        override fun <T : androidx.lifecycle.ViewModel> create(modelClass: Class<T>): T {
+            return QrScanViewModel(application, apiClient) as T
         }
     }
 }

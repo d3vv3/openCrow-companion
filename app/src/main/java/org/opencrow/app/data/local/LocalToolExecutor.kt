@@ -98,7 +98,6 @@ class LocalToolExecutor(
                 "read_sms"              -> readSms(args)
                 "get_wifi_info"         -> getWifiInfo()
                 "get_device_info"       -> getDeviceInfo()
-                "send_notification"     -> sendNotification(args)
                 "web_open"              -> withContext(Dispatchers.Main) { webOpen(args) }
                 "set_brightness"        -> setBrightness(args)
                 "toggle_flashlight"     -> toggleFlashlight(args)
@@ -107,6 +106,8 @@ class LocalToolExecutor(
                 "start_stopwatch"       -> startStopwatch()
                 "list_alarms"           -> listAlarms()
                 "delete_alarm"          -> deleteAlarm(args)
+                "list_unified_push_distributors" -> listUnifiedPushDistributors()
+                "configure_unified_push" -> configureUnifiedPush(args)
                 else                    -> ToolResult(output = "Unknown local tool: $toolName", isError = true)
             }
         } catch (e: Exception) {
@@ -889,5 +890,102 @@ class LocalToolExecutor(
         nm.notify(NOTIF_ID_NO_CALENDAR, notif)
     }
 
+    /**
+     * Show a local Android notification triggered by an incoming UnifiedPush message.
+     * Public so UPReceiver can call it without executing a full tool dispatch.
+     */
+    fun showPushNotification(ctx: Context, title: String, body: String, channel: String, conversationId: String? = null) {
+        val channelId = if (channel.lowercase() == "alert") NOTIF_CHANNEL_ALERT else NOTIF_CHANNEL_DEFAULT
+        val nm = ctx.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
+        ensureNotificationChannels(nm)
+
+        val tapIntent = ctx.packageManager.getLaunchIntentForPackage(ctx.packageName)
+            ?.apply {
+                flags = Intent.FLAG_ACTIVITY_SINGLE_TOP or Intent.FLAG_ACTIVITY_CLEAR_TOP or Intent.FLAG_ACTIVITY_NEW_TASK
+                if (!conversationId.isNullOrEmpty()) putExtra("conversation_id", conversationId)
+            }
+        val pendingIntent = tapIntent?.let {
+            PendingIntent.getActivity(ctx, conversationId.hashCode(), it, PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE)
+        }
+
+        val notif = NotificationCompat.Builder(ctx, channelId)
+            .setSmallIcon(R.mipmap.ic_launcher)
+            .setContentTitle(title)
+            .setContentText(body)
+            .setStyle(NotificationCompat.BigTextStyle().bigText(body))
+            .setPriority(if (channelId == NOTIF_CHANNEL_ALERT) NotificationCompat.PRIORITY_HIGH else NotificationCompat.PRIORITY_DEFAULT)
+            .setAutoCancel(true)
+            .apply { if (pendingIntent != null) setContentIntent(pendingIntent) }
+            .build()
+        nm.notify(System.currentTimeMillis().toInt(), notif)
+    }
+
     data class ToolResult(val output: String, val isError: Boolean = false)
+
+    // ─── UnifiedPush tools ───────────────────────────────────────────────────
+
+    private fun listUnifiedPushDistributors(): ToolResult {
+        val distributors = org.unifiedpush.android.connector.UnifiedPush.getDistributors(context)
+        val active = org.unifiedpush.android.connector.UnifiedPush.getAckDistributor(context)
+        val result = buildString {
+            if (distributors.isEmpty()) {
+                append("No UnifiedPush distributor apps are installed on this device.")
+            } else {
+                append("Available UnifiedPush distributors (${distributors.size}):\n")
+                for (d in distributors) {
+                    val marker = if (d == active) " [active]" else ""
+                    append("- $d$marker\n")
+                }
+                if (active.isNullOrEmpty()) {
+                    append("\nNo distributor is currently active. Use configure_unified_push to set one.")
+                }
+            }
+        }
+        return ToolResult(output = result)
+    }
+
+    private suspend fun configureUnifiedPush(args: Map<String, Any>): ToolResult {
+        val distributor = args["distributor"] as? String
+            ?: return ToolResult(output = "Missing required argument: distributor", isError = true)
+        val available = org.unifiedpush.android.connector.UnifiedPush.getDistributors(context)
+        if (distributor !in available) {
+            return ToolResult(
+                output = "Distributor '$distributor' is not installed. Available: ${available.joinToString()}",
+                isError = true
+            )
+        }
+        org.unifiedpush.android.connector.UnifiedPush.saveDistributor(context, distributor)
+        // Retrieve deviceId for the instance parameter
+        val deviceId = apiClient.getDeviceId() ?: ""
+        Log.i(TAG, "configureUnifiedPush: saving distributor='$distributor', calling register with instance='$deviceId'")
+        org.unifiedpush.android.connector.UnifiedPush.register(context, instance = deviceId)
+
+        // If a push endpoint is already stored (from a previous registration or early UP setup),
+        // register it with the server immediately rather than waiting for onNewEndpoint.
+        val storedEndpoint = apiClient.getPushEndpoint()
+        Log.i(TAG, "configureUnifiedPush: storedEndpoint='$storedEndpoint'")
+        if (!storedEndpoint.isNullOrEmpty() && deviceId.isNotEmpty()) {
+            return try {
+                val resp = apiClient.api.registerDevice(
+                    deviceId,
+                    org.opencrow.app.data.remote.dto.RegisterDeviceRequest(
+                        capabilities = org.opencrow.app.data.local.LocalToolCapabilities.all,
+                        pushEndpoint  = storedEndpoint
+                    )
+                )
+                if (resp.isSuccessful) {
+                    Log.i(TAG, "configureUnifiedPush: server updated with existing endpoint=$storedEndpoint")
+                    ToolResult(output = "UnifiedPush distributor set to '$distributor'. Push endpoint registered with server. You can now send push notifications to this device.")
+                } else {
+                    Log.w(TAG, "configureUnifiedPush: server rejected endpoint registration: ${resp.code()}")
+                    ToolResult(output = "UnifiedPush distributor set to '$distributor' and registration requested. (Server returned ${resp.code()} when registering endpoint.)")
+                }
+            } catch (e: Exception) {
+                Log.e(TAG, "configureUnifiedPush: failed to register endpoint with server: ${e.message}")
+                ToolResult(output = "UnifiedPush distributor set to '$distributor' and registration requested. (Could not reach server to register endpoint: ${e.message})")
+            }
+        }
+
+        return ToolResult(output = "UnifiedPush distributor set to '$distributor' and registration requested. The app will receive push notifications once the distributor confirms the endpoint.")
+    }
 }

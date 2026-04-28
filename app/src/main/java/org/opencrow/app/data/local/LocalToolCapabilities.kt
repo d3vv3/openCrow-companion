@@ -211,19 +211,6 @@ object LocalToolCapabilities {
             )
         ),
         DeviceCapability(
-            name = "send_notification",
-            description = "Send a local push notification to the user's device",
-            parameters = mapOf(
-                "type" to "object",
-                "properties" to mapOf(
-                    "title"   to mapOf("type" to "string", "description" to "Notification title"),
-                    "message" to mapOf("type" to "string", "description" to "Notification body text"),
-                    "channel" to mapOf("type" to "string", "description" to "Notification channel: 'default', 'alert' (default: 'default')")
-                ),
-                "required" to listOf("title", "message")
-            )
-        ),
-        DeviceCapability(
             name = "web_open",
             description = "Open a URL in the device's default browser",
             parameters = mapOf(
@@ -308,6 +295,26 @@ object LocalToolCapabilities {
                 "type" to "object",
                 "properties" to emptyMap<String, Any>(),
                 "required" to listOf<String>()
+            )
+        ),
+        DeviceCapability(
+            name = "list_unified_push_distributors",
+            description = "List all available UnifiedPush distributor apps installed on the device and which one is currently active",
+            parameters = mapOf(
+                "type" to "object",
+                "properties" to emptyMap<String, Any>(),
+                "required" to listOf<String>()
+            )
+        ),
+        DeviceCapability(
+            name = "configure_unified_push",
+            description = "Set the active UnifiedPush distributor on the device and register for push notifications. Use list_unified_push_distributors first to get available distributor package names.",
+            parameters = mapOf(
+                "type" to "object",
+                "properties" to mapOf(
+                    "distributor" to mapOf("type" to "string", "description" to "Package name of the UnifiedPush distributor app to use (e.g. 'org.unifiedpush.distributor.ntfy')")
+                ),
+                "required" to listOf("distributor")
             )
         )
     )

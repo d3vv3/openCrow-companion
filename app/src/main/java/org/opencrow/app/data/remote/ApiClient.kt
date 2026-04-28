@@ -50,6 +50,14 @@ class ApiClient(private val configDao: ConfigDao) {
 
     suspend fun getDeviceId(): String? = configDao.get("deviceId")
     suspend fun getServer(): String? = configDao.get("server")
+    suspend fun getPushEndpoint(): String? = configDao.get("pushEndpoint")
+    suspend fun savePushEndpoint(endpoint: String) {
+        if (endpoint.isEmpty()) {
+            configDao.delete("pushEndpoint")
+        } else {
+            configDao.set(AppConfig("pushEndpoint", endpoint))
+        }
+    }
 
     fun getAccessToken(): String? = _accessToken
     fun getBaseUrl(): String? = _baseUrl
@@ -141,6 +149,9 @@ class ApiClient(private val configDao: ConfigDao) {
         _accessToken = null
         _refreshToken = null
     }
+
+    suspend fun isOnboardingDone(): Boolean = configDao.get("onboardingDone") != null
+    suspend fun setOnboardingDone() { configDao.set(AppConfig("onboardingDone", "true")) }
 
     suspend fun persistCurrentTokens() {
         val access = _accessToken ?: return

@@ -10,7 +10,11 @@ data class DeviceCapability(
     val description: String,
     val parameters: Map<String, Any>? = null
 )
-data class RegisterDeviceRequest(val capabilities: List<DeviceCapability>)
+data class RegisterDeviceRequest(
+    val capabilities: List<DeviceCapability>,
+    val pushEndpoint: String? = null,
+    val pushAuth: String? = null
+)
 data class RegisterDeviceResponse(
     val deviceId: String,
     val capabilities: List<DeviceCapability>,

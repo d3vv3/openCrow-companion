@@ -28,6 +28,8 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.core.content.ContextCompat
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.google.zxing.*
 import com.google.zxing.common.HybridBinarizer
@@ -41,25 +43,31 @@ fun QrScanScreen(onPaired: () -> Unit) {
     val context = LocalContext.current
     val app = context.applicationContext as OpenCrowApp
     val viewModel: QrScanViewModel = viewModel(
-        factory = QrScanViewModel.Factory(app.container.apiClient)
+        factory = QrScanViewModel.Factory(app, app.container.apiClient)
     )
     val state by viewModel.uiState.collectAsState()
     val spacing = LocalSpacing.current
 
     val permissionLauncher = rememberLauncherForActivityResult(
-        ActivityResultContracts.RequestMultiplePermissions()
-    ) { permissions ->
-        viewModel.onPermissionsResult(permissions[Manifest.permission.CAMERA] == true)
+        ActivityResultContracts.RequestPermission()
+    ) { granted ->
+        viewModel.onPermissionsResult(granted)
     }
 
-    LaunchedEffect(Unit) {
-        permissionLauncher.launch(
-            arrayOf(
-                Manifest.permission.CAMERA,
-                Manifest.permission.READ_CALENDAR,
-                Manifest.permission.RECORD_AUDIO
-            )
-        )
+    // Check camera permission immediately and every time we resume
+    // (covers the case where MainActivity's dialog was accepted while this screen is visible)
+    val lifecycleOwner = LocalLifecycleOwner.current
+    DisposableEffect(lifecycleOwner) {
+        val observer = LifecycleEventObserver { _, event ->
+            if (event == Lifecycle.Event.ON_RESUME) {
+                val granted = ContextCompat.checkSelfPermission(
+                    context, Manifest.permission.CAMERA
+                ) == android.content.pm.PackageManager.PERMISSION_GRANTED
+                viewModel.onPermissionsResult(granted)
+            }
+        }
+        lifecycleOwner.lifecycle.addObserver(observer)
+        onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
     }
 
     LaunchedEffect(state.paired) {
@@ -112,17 +120,23 @@ fun QrScanScreen(onPaired: () -> Unit) {
                     modifier = Modifier.weight(1f),
                     contentAlignment = Alignment.Center
                 ) {
-                    Surface(
-                        color = MaterialTheme.colorScheme.errorContainer,
-                        shape = RoundedCornerShape(4.dp)
-                    ) {
-                        Text(
-                            text = "Camera permission required to scan the QR code.",
-                            style = MaterialTheme.typography.bodyMedium,
-                            color = MaterialTheme.colorScheme.onErrorContainer,
-                            textAlign = TextAlign.Center,
-                            modifier = Modifier.padding(spacing.md)
-                        )
+                    Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                        Surface(
+                            color = MaterialTheme.colorScheme.errorContainer,
+                            shape = RoundedCornerShape(4.dp)
+                        ) {
+                            Text(
+                                text = "Camera permission required to scan the QR code.",
+                                style = MaterialTheme.typography.bodyMedium,
+                                color = MaterialTheme.colorScheme.onErrorContainer,
+                                textAlign = TextAlign.Center,
+                                modifier = Modifier.padding(spacing.md)
+                            )
+                        }
+                        Spacer(Modifier.height(spacing.md))
+                        Button(onClick = { permissionLauncher.launch(Manifest.permission.CAMERA) }) {
+                            Text("Grant Camera Permission")
+                        }
                     }
                 }
             } else {
@@ -176,7 +190,7 @@ fun QrScanScreen(onPaired: () -> Unit) {
                                 )
                                 Spacer(Modifier.height(spacing.sm))
                                 Text(
-                                    "Pairing...",
+                                    state.status ?: "Pairing...",
                                     style = MaterialTheme.typography.bodyMedium,
                                     color = MaterialTheme.colorScheme.onSurface
                                 )

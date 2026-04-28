@@ -100,7 +100,11 @@ fun AssistScreen(
     val view = androidx.compose.ui.platform.LocalView.current
     LaunchedEffect(lastMessageLength) {
         if (state.streaming && lastMessageLength > 0 && kotlin.random.Random.nextFloat() > 0.3f) {
-            view.performHapticFeedback(android.view.HapticFeedbackConstants.KEYBOARD_TAP)
+            val hapticType = if (kotlin.random.Random.nextFloat() < 0.1f)
+                android.view.HapticFeedbackConstants.KEYBOARD_TAP
+            else
+                android.view.HapticFeedbackConstants.CLOCK_TICK
+            view.performHapticFeedback(hapticType)
         }
     }
     var prevStreaming by remember { mutableStateOf(false) }

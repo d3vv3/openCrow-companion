@@ -100,10 +100,14 @@ fun ChatScreen(
 
     // Typing haptic feedback while the assistant is streaming
     val view = androidx.compose.ui.platform.LocalView.current
-    // Micro tap on each token flush -- randomly skip ~30% to break periodicity
+    // Soft tap on each token flush; occasionally (10%) a stronger tap for variety
     LaunchedEffect(lastMessageLength) {
         if (state.streaming && lastMessageLength > 0 && Random.nextFloat() > 0.3f) {
-            view.performHapticFeedback(android.view.HapticFeedbackConstants.KEYBOARD_TAP)
+            val hapticType = if (Random.nextFloat() < 0.1f)
+                android.view.HapticFeedbackConstants.KEYBOARD_TAP
+            else
+                android.view.HapticFeedbackConstants.CLOCK_TICK
+            view.performHapticFeedback(hapticType)
         }
     }
     // Strong confirmation tap when streaming finishes

@@ -108,5 +108,8 @@ dependencies {
     // WorkManager for heartbeat
     implementation(libs.androidx.work.runtime.ktx)
 
+    // UnifiedPush
+    implementation("org.unifiedpush.android:connector:3.0.10")
+
     debugImplementation(libs.androidx.ui.tooling)
 }

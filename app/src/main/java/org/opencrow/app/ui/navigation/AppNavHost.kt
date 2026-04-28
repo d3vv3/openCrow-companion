@@ -11,12 +11,16 @@ import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
 import androidx.navigation.compose.rememberNavController
 import org.opencrow.app.OpenCrowApp
+import org.opencrow.app.data.local.LocalToolCapabilities
+import org.opencrow.app.data.remote.dto.RegisterDeviceRequest
 import org.opencrow.app.ui.screens.chat.ChatScreen
+import org.opencrow.app.ui.screens.onboarding.OnboardingScreen
 import org.opencrow.app.ui.screens.qrscan.QrScanScreen
 import org.opencrow.app.ui.screens.settings.SettingsScreen
 
 object Routes {
     const val QR_SCAN = "qr_scan"
+    const val ONBOARDING = "onboarding"
     const val CHAT = "chat"
     const val SETTINGS = "settings"
 }
@@ -35,7 +39,8 @@ fun AppNavHost(
         app.container.apiClient.initialize()
 
         if (!app.container.apiClient.isConfigured) {
-            startDest = Routes.QR_SCAN
+            val onboardingDone = app.container.apiClient.isOnboardingDone()
+            startDest = if (onboardingDone) Routes.QR_SCAN else Routes.ONBOARDING
             return@LaunchedEffect
         }
 
@@ -54,6 +59,36 @@ fun AppNavHost(
         }
 
         startDest = if (valid) Routes.CHAT else Routes.QR_SCAN
+
+        // If valid and we have a stored push endpoint, ensure the server has it
+        // (covers the case where UP endpoint was assigned before/after QR pairing)
+        if (valid) {
+            try {
+                val apiClient = app.container.apiClient
+                val storedEndpoint = apiClient.getPushEndpoint()
+                val deviceId = apiClient.getDeviceId()
+                if (!storedEndpoint.isNullOrEmpty() && deviceId != null) {
+                    apiClient.api.registerDevice(deviceId, RegisterDeviceRequest(
+                        capabilities = LocalToolCapabilities.all,
+                        pushEndpoint = storedEndpoint
+                    ))
+                    Log.i("AppNavHost", "Push endpoint synced on startup")
+                }
+            } catch (e: Exception) {
+                Log.w("AppNavHost", "Push endpoint sync failed: ${e.message}")
+            }
+        }
+    }
+
+    LaunchedEffect(startDest, pendingConversationId) {
+        pendingConversationId ?: return@LaunchedEffect
+        startDest ?: return@LaunchedEffect
+
+        // If a notification delivers a conversation id, always bring the user to the
+        // chat route so ChatScreen can select that conversation immediately.
+        navController.navigate(Routes.CHAT) {
+            launchSingleTop = true
+        }
     }
 
     if (startDest == null) return
@@ -71,6 +106,15 @@ fun AppNavHost(
                 onPaired = {
                     navController.navigate(Routes.CHAT) {
                         popUpTo(Routes.QR_SCAN) { inclusive = true }
+                    }
+                }
+            )
+        }
+        composable(Routes.ONBOARDING) {
+            OnboardingScreen(
+                onDone = {
+                    navController.navigate(Routes.QR_SCAN) {
+                        popUpTo(Routes.ONBOARDING) { inclusive = true }
                     }
                 }
             )
