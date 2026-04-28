@@ -1,3 +1,10 @@
+## [1.2.1](https://github.com/d3vv3/openCrow-companion/compare/v1.2.0...v1.2.1) (2026-04-28)
+
+
+### Bug Fixes
+
+* list alarms ([5dd905e](https://github.com/d3vv3/openCrow-companion/commit/5dd905e4c5132efb12affce706fb8c31e1f4b74f))
+
 # [1.2.0](https://github.com/d3vv3/openCrow-companion/compare/v1.1.1...v1.2.0) (2026-04-28)
 
 
