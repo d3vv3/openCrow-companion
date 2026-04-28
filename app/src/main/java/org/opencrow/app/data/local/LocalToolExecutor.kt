@@ -790,27 +790,32 @@ class LocalToolExecutor(
     }
 
     private fun listAlarms(): ToolResult {
-        // Query the AOSP DeskClock content provider (works on AOSP + most OEM roms)
-        val uri = android.net.Uri.parse("content://com.android.deskclock/alarm")
-        return try {
-            val cursor = context.contentResolver.query(uri, null, null, null, null)
-                ?: return ToolResult(output = "[]") // provider not available -> return empty
-            val alarms = mutableListOf<Map<String, Any?>>()
-            cursor.use {
-                while (it.moveToNext()) {
-                    val row = mutableMapOf<String, Any?>()
-                    for (col in it.columnNames) {
-                        row[col] = try { it.getString(it.getColumnIndexOrThrow(col)) } catch (_: Exception) { null }
-                    }
-                    alarms.add(row)
-                }
-            }
-            val json = org.json.JSONArray(alarms.map { org.json.JSONObject(it) }).toString()
-            ToolResult(output = json)
-        } catch (e: Exception) {
-            Log.w(TAG, "listAlarms: content provider unavailable: ${e.message}")
-            ToolResult(output = "[]") // not an error -- just no access
+        val providerUris = listOf(
+            Uri.parse("content://com.android.deskclock/alarm"),
+            Uri.parse("content://com.google.android.deskclock/alarm"),
+            Uri.parse("content://com.android.deskclock/alarms"),
+            Uri.parse("content://com.google.android.deskclock/alarms")
+        )
+
+        val alarms = mutableListOf<Map<String, Any?>>()
+        for (uri in providerUris) {
+            alarms += queryAlarmProvider(uri)
         }
+
+        val deduped = linkedMapOf<String, Map<String, Any?>>()
+        for (alarm in alarms) {
+            val key = listOf(
+                alarm["hour"],
+                alarm["minute"],
+                alarm["label"],
+                alarm["days"],
+                alarm["source"]
+            ).joinToString("|")
+            deduped[key] = alarm
+        }
+
+        val json = org.json.JSONArray(deduped.values.map { org.json.JSONObject(it) }).toString()
+        return ToolResult(output = json)
     }
 
     private fun deleteAlarm(args: Map<String, Any>): ToolResult {
@@ -818,19 +823,85 @@ class LocalToolExecutor(
         val minute = (args["minute"] as? Number)?.toInt() ?: 0
         val label  = args["label"]  as? String
 
-        val intent = Intent(android.provider.AlarmClock.ACTION_DISMISS_ALARM).apply {
-            putExtra(android.provider.AlarmClock.EXTRA_HOUR, hour)
-            putExtra(android.provider.AlarmClock.EXTRA_MINUTES, minute)
-            if (label != null) putExtra(android.provider.AlarmClock.EXTRA_MESSAGE, label)
-            putExtra(android.provider.AlarmClock.EXTRA_SKIP_UI, true)
-            addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+        val intentsToTry = listOf(
+            Intent(android.provider.AlarmClock.ACTION_DISMISS_ALARM).apply {
+                `package` = "com.google.android.deskclock"
+            },
+            Intent(android.provider.AlarmClock.ACTION_DISMISS_ALARM).apply {
+                `package` = "com.android.deskclock"
+            },
+            Intent(android.provider.AlarmClock.ACTION_DISMISS_ALARM)
+        ).onEach { intent ->
+            intent.putExtra(android.provider.AlarmClock.EXTRA_HOUR, hour)
+            intent.putExtra(android.provider.AlarmClock.EXTRA_MINUTES, minute)
+            if (label != null) intent.putExtra(android.provider.AlarmClock.EXTRA_MESSAGE, label)
+            intent.putExtra(android.provider.AlarmClock.EXTRA_SKIP_UI, true)
+            intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
         }
+
+        for (intent in intentsToTry) {
+            try {
+                context.startActivity(intent)
+                return ToolResult(output = "Alarm at %02d:%02d deleted".format(hour, minute))
+            } catch (_: android.content.ActivityNotFoundException) {
+                // Try next target.
+            }
+        }
+
+        return ToolResult(output = "No alarm app found to handle delete request", isError = true)
+    }
+
+    private fun queryAlarmProvider(uri: Uri): List<Map<String, Any?>> {
         return try {
-            context.startActivity(intent)
-            ToolResult(output = "Alarm at %02d:%02d deleted".format(hour, minute))
-        } catch (e: android.content.ActivityNotFoundException) {
-            ToolResult(output = "No alarm app found to handle delete request", isError = true)
+            val cursor = context.contentResolver.query(uri, null, null, null, null) ?: return emptyList()
+            val alarms = mutableListOf<Map<String, Any?>>()
+            cursor.use {
+                while (it.moveToNext()) {
+                    val row = mutableMapOf<String, Any?>()
+                    for (col in it.columnNames) {
+                        row[col] = try {
+                            it.getString(it.getColumnIndexOrThrow(col))
+                        } catch (_: Exception) {
+                            null
+                        }
+                    }
+                    val normalized = normalizeAlarmRow(row, uri.toString())
+                    if (normalized != null) alarms += normalized
+                }
+            }
+            alarms
+        } catch (e: Exception) {
+            Log.w(TAG, "listAlarms: provider $uri unavailable: ${e.message}")
+            emptyList()
         }
+    }
+
+    private fun normalizeAlarmRow(row: Map<String, Any?>, source: String): Map<String, Any?>? {
+        val hour = row["hour"]?.toString()?.toIntOrNull()
+            ?: row["alarmtime"]?.toString()?.let { millis ->
+                millis.toLongOrNull()?.let {
+                    Calendar.getInstance().apply { timeInMillis = it }.get(Calendar.HOUR_OF_DAY)
+                }
+            }
+        val minute = row["minutes"]?.toString()?.toIntOrNull()
+            ?: row["minute"]?.toString()?.toIntOrNull()
+            ?: row["alarmtime"]?.toString()?.let { millis ->
+                millis.toLongOrNull()?.let {
+                    Calendar.getInstance().apply { timeInMillis = it }.get(Calendar.MINUTE)
+                }
+            }
+
+        if (hour == null || minute == null) return null
+
+        return linkedMapOf(
+            "hour" to hour,
+            "minute" to minute,
+            "label" to (row["message"] ?: row["label"] ?: "Alarm"),
+            "enabled" to ((row["enabled"] ?: row["is_enabled"] ?: "1").toString() != "0"),
+            "days" to (row["daysofweek"] ?: row["days_of_week"] ?: row["days"] ?: ""),
+            "source" to source,
+            "raw" to org.json.JSONObject(row)
+        )
     }
 
     // ─── Notification channels ───────────────────────────────────────────────
