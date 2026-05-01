@@ -1,3 +1,10 @@
+# [1.3.0](https://github.com/d3vv3/openCrow-companion/compare/v1.2.1...v1.3.0) (2026-05-01)
+
+
+### Features
+
+* UnifiedPush realtime tools ([31d676b](https://github.com/d3vv3/openCrow-companion/commit/31d676b3fe6c68173530e646aacae7f8882f6e48))
+
 ## [1.2.1](https://github.com/d3vv3/openCrow-companion/compare/v1.2.0...v1.2.1) (2026-04-28)
 
 
