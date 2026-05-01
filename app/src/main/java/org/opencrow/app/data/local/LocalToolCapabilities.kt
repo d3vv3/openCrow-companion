@@ -106,13 +106,24 @@ object LocalToolCapabilities {
         ),
         DeviceCapability(
             name = "read_calendar",
-            description = "List upcoming calendar events from the phone",
+            description = "List upcoming calendar events from the phone. Each event includes its id, which can be used to delete it.",
             parameters = mapOf(
                 "type" to "object",
                 "properties" to mapOf(
                     "limit" to mapOf("type" to "integer", "description" to "Maximum number of events to return (default 10)")
                 ),
                 "required" to listOf<String>()
+            )
+        ),
+        DeviceCapability(
+            name = "delete_calendar_event",
+            description = "Delete a calendar event from the phone by its event ID. Use read_calendar first to get the event ID.",
+            parameters = mapOf(
+                "type" to "object",
+                "properties" to mapOf(
+                    "event_id" to mapOf("type" to "integer", "description" to "The numeric event ID returned by read_calendar")
+                ),
+                "required" to listOf("event_id")
             )
         ),
         DeviceCapability(

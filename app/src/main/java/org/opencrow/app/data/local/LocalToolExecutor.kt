@@ -51,6 +51,10 @@ class LocalToolExecutor(
         private const val NOTIF_CHANNEL_DEFAULT = "opencrow_default"
         private const val NOTIF_CHANNEL_ALERT   = "opencrow_alert"
         private const val NOTIF_ID_NO_CALENDAR  = 9002
+        // SharedPreferences key for alarms set via set_alarm.
+        // Android has no public API to list alarms, so we track them ourselves.
+        private const val ALARM_PREFS_NAME   = "opencrow_alarms"
+        private const val PREF_ALARMS        = "alarms"
     }
 
     /**
@@ -89,6 +93,7 @@ class LocalToolExecutor(
                 "read_contacts"         -> readContacts(args)
                 "read_call_log"         -> readCallLog(args)
                 "read_calendar"         -> readCalendar(args)
+                "delete_calendar_event" -> deleteCalendarEvent(args)
                 "list_apps"             -> listApps(args)
                 "open_app"              -> openApp(args)
                 "get_battery"           -> getBattery()
@@ -175,6 +180,7 @@ class LocalToolExecutor(
             }
             Log.d(TAG, "setAlarm() firing ACTION_SET_ALARM intent hour=$hour minute=$minute label=$label days=$calendarDays skipUI=true")
             context.startActivity(intent)
+            trackAlarm(hour, minute, label, rawDays?.filterIsInstance<String>().orEmpty())
             val timeStr = "%02d:%02d".format(hour, minute)
             val dayNames = rawDays?.filterIsInstance<String>()?.joinToString(", ")
             val recurStr = if (dayNames != null) " every $dayNames" else ""
@@ -427,7 +433,12 @@ class LocalToolExecutor(
         val now = System.currentTimeMillis()
         val cursor = context.contentResolver.query(
             CalendarContract.Events.CONTENT_URI,
-            arrayOf(CalendarContract.Events.TITLE, CalendarContract.Events.DTSTART, CalendarContract.Events.DTEND),
+            arrayOf(
+                CalendarContract.Events._ID,
+                CalendarContract.Events.TITLE,
+                CalendarContract.Events.DTSTART,
+                CalendarContract.Events.DTEND
+            ),
             "${CalendarContract.Events.DTSTART} >= ?",
             arrayOf(now.toString()),
             "${CalendarContract.Events.DTSTART} ASC"
@@ -436,14 +447,43 @@ class LocalToolExecutor(
         cursor?.use {
             var count = 0
             while (it.moveToNext() && count < limit) {
-                val title = it.getString(0) ?: "Untitled"
-                val start = it.getLong(1)
-                val end   = it.getLong(2)
-                results.add("$title (${formatTime(start)} - ${formatTime(end)})")
+                val id    = it.getLong(0)
+                val title = it.getString(1) ?: "Untitled"
+                val start = it.getLong(2)
+                val end   = it.getLong(3)
+                results.add("[id=$id] $title (${formatTime(start)} - ${formatTime(end)})")
                 count++
             }
         }
         return ToolResult(output = if (results.isEmpty()) "No upcoming events found" else results.joinToString("\n"))
+    }
+
+    private suspend fun deleteCalendarEvent(args: Map<String, Any>): ToolResult {
+        val eventId = when (val raw = args["event_id"]) {
+            is Double -> raw.toLong()
+            is Long   -> raw
+            is Int    -> raw.toLong()
+            is String -> raw.toLongOrNull()
+            else      -> null
+        } ?: return ToolResult(output = "event_id is required and must be a number", isError = true)
+
+        if (!ensurePermission(Manifest.permission.WRITE_CALENDAR)) {
+            return ToolResult(output = "WRITE_CALENDAR permission denied. Cannot delete calendar event.", isError = true)
+        }
+
+        return withContext(Dispatchers.IO) {
+            try {
+                val uri = android.content.ContentUris.withAppendedId(CalendarContract.Events.CONTENT_URI, eventId)
+                val deleted = context.contentResolver.delete(uri, null, null)
+                if (deleted > 0) {
+                    ToolResult(output = "Calendar event $eventId deleted successfully")
+                } else {
+                    ToolResult(output = "No event found with id=$eventId (may already be deleted)", isError = true)
+                }
+            } catch (e: Exception) {
+                ToolResult(output = "Failed to delete calendar event: ${e.message}", isError = true)
+            }
+        }
     }
 
     private fun listApps(args: Map<String, Any>): ToolResult {
@@ -802,19 +842,19 @@ class LocalToolExecutor(
             alarms += queryAlarmProvider(uri)
         }
 
+        // Merge provider results with locally tracked alarms (provider results take precedence).
+        // De-duplicate by hour+minute+label so tracked alarms that also appear in the provider
+        // are not listed twice.
         val deduped = linkedMapOf<String, Map<String, Any?>>()
-        for (alarm in alarms) {
-            val key = listOf(
-                alarm["hour"],
-                alarm["minute"],
-                alarm["label"],
-                alarm["days"],
-                alarm["source"]
-            ).joinToString("|")
+        for (alarm in trackedAlarms() + alarms) {
+            val key = "%02d:%02d:%s".format(alarm["hour"], alarm["minute"], alarm["label"] ?: "")
             deduped[key] = alarm
         }
 
-        val json = org.json.JSONArray(deduped.values.map { org.json.JSONObject(it) }).toString()
+        if (deduped.isEmpty()) return ToolResult(output = "No alarms found")
+        val json = org.json.JSONArray(deduped.values.map { entry ->
+            org.json.JSONObject(entry.filterValues { it != null })
+        }).toString()
         return ToolResult(output = json)
     }
 
@@ -823,32 +863,61 @@ class LocalToolExecutor(
         val minute = (args["minute"] as? Number)?.toInt() ?: 0
         val label  = args["label"]  as? String
 
-        val intentsToTry = listOf(
-            Intent(android.provider.AlarmClock.ACTION_DISMISS_ALARM).apply {
-                `package` = "com.google.android.deskclock"
-            },
-            Intent(android.provider.AlarmClock.ACTION_DISMISS_ALARM).apply {
-                `package` = "com.android.deskclock"
-            },
-            Intent(android.provider.AlarmClock.ACTION_DISMISS_ALARM)
-        ).onEach { intent ->
-            intent.putExtra(android.provider.AlarmClock.EXTRA_HOUR, hour)
-            intent.putExtra(android.provider.AlarmClock.EXTRA_MINUTES, minute)
-            if (label != null) intent.putExtra(android.provider.AlarmClock.EXTRA_MESSAGE, label)
-            intent.putExtra(android.provider.AlarmClock.EXTRA_SKIP_UI, true)
-            intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-        }
-
-        for (intent in intentsToTry) {
+        // Try to delete via content provider first (permanent removal).
+        // We query each known provider URI, find the row matching hour/minute/(label),
+        // and delete it by _id.
+        val providerUris = listOf(
+            Uri.parse("content://com.google.android.deskclock/alarm"),
+            Uri.parse("content://com.android.deskclock/alarm"),
+            Uri.parse("content://com.google.android.deskclock/alarms"),
+            Uri.parse("content://com.android.deskclock/alarms")
+        )
+        for (baseUri in providerUris) {
             try {
-                context.startActivity(intent)
-                return ToolResult(output = "Alarm at %02d:%02d deleted".format(hour, minute))
-            } catch (_: android.content.ActivityNotFoundException) {
-                // Try next target.
+                val cursor = context.contentResolver.query(baseUri, null, null, null, null)
+                    ?: continue
+                var rowId: String? = null
+                cursor.use {
+                    while (it.moveToNext()) {
+                        val rowHour = it.getColumnIndex("hour").takeIf { i -> i >= 0 }
+                            ?.let { i -> it.getInt(i) }
+                        val rowMin = (it.getColumnIndex("minutes").takeIf { i -> i >= 0 }
+                            ?: it.getColumnIndex("minute").takeIf { i -> i >= 0 })
+                            ?.let { i -> it.getInt(i) }
+                        if (rowHour != hour || rowMin != minute) continue
+                        if (label != null) {
+                            val rowLabel = (it.getColumnIndex("message").takeIf { i -> i >= 0 }
+                                ?: it.getColumnIndex("label").takeIf { i -> i >= 0 })
+                                ?.let { i -> it.getString(i) }
+                            if (rowLabel != null && rowLabel != label) continue
+                        }
+                        rowId = it.getColumnIndex("_id").takeIf { i -> i >= 0 }
+                            ?.let { i -> it.getString(i) }
+                        break
+                    }
+                }
+                if (rowId != null) {
+                    val deleteUri = Uri.withAppendedPath(baseUri, rowId)
+                    val deleted = context.contentResolver.delete(deleteUri, null, null)
+                    if (deleted > 0) {
+                        untrackAlarm(hour, minute, label)
+                        Log.d(TAG, "deleteAlarm: deleted via provider $baseUri id=$rowId")
+                        return ToolResult(output = "Alarm at %02d:%02d deleted".format(hour, minute))
+                    }
+                }
+            } catch (e: Exception) {
+                Log.w(TAG, "deleteAlarm: provider $baseUri failed: ${e.message}")
             }
         }
 
-        return ToolResult(output = "No alarm app found to handle delete request", isError = true)
+        // If provider deletion didn't work, fall back to untracking only.
+        // The alarm may still exist in the clock app but we can't remove it programmatically.
+        untrackAlarm(hour, minute, label)
+        Log.w(TAG, "deleteAlarm: could not delete via provider, removed from tracking only")
+        return ToolResult(
+            output = "Alarm at %02d:%02d removed from tracking. " +
+                     "If it still appears in your clock app, please delete it manually.".format(hour, minute)
+        )
     }
 
     private fun queryAlarmProvider(uri: Uri): List<Map<String, Any?>> {
@@ -902,6 +971,69 @@ class LocalToolExecutor(
             "source" to source,
             "raw" to org.json.JSONObject(row)
         )
+    }
+
+    // ─── Alarm tracking ──────────────────────────────────────────────────────
+    // Android has no public API to list alarms, so we persist alarms set via
+    // set_alarm in SharedPreferences and merge them with any content-provider
+    // results in listAlarms().
+
+    private fun trackAlarm(hour: Int, minute: Int, label: String, days: List<String>) {
+        val prefs = context.getSharedPreferences(ALARM_PREFS_NAME, Context.MODE_PRIVATE)
+        val arr = org.json.JSONArray(prefs.getString(PREF_ALARMS, "[]") ?: "[]")
+        val entry = org.json.JSONObject().apply {
+            put("hour", hour)
+            put("minute", minute)
+            put("label", label)
+            put("days", org.json.JSONArray(days))
+            put("enabled", true)
+            put("source", "opencrow_tracked")
+        }
+        arr.put(entry)
+        prefs.edit().putString(PREF_ALARMS, arr.toString()).apply()
+        Log.d(TAG, "trackAlarm: stored $hour:$minute '$label' days=$days")
+    }
+
+    private fun trackedAlarms(): List<Map<String, Any?>> {
+        val prefs = context.getSharedPreferences(ALARM_PREFS_NAME, Context.MODE_PRIVATE)
+        return try {
+            val arr = org.json.JSONArray(prefs.getString(PREF_ALARMS, "[]") ?: "[]")
+            buildList {
+                for (i in 0 until arr.length()) {
+                    val obj = arr.optJSONObject(i) ?: continue
+                    add(linkedMapOf(
+                        "hour"    to obj.optInt("hour"),
+                        "minute"  to obj.optInt("minute"),
+                        "label"   to obj.optString("label", "Alarm"),
+                        "enabled" to obj.optBoolean("enabled", true),
+                        "days"    to (obj.optJSONArray("days")?.let { d ->
+                            buildList { for (j in 0 until d.length()) add(d.optString(j)) }
+                        } ?: emptyList<String>()),
+                        "source"  to obj.optString("source", "opencrow_tracked")
+                    ))
+                }
+            }
+        } catch (e: Exception) {
+            Log.w(TAG, "trackedAlarms: parse error: ${e.message}")
+            emptyList()
+        }
+    }
+
+    private fun untrackAlarm(hour: Int, minute: Int, label: String?) {
+        val prefs = context.getSharedPreferences(ALARM_PREFS_NAME, Context.MODE_PRIVATE)
+        val src = try {
+            org.json.JSONArray(prefs.getString(PREF_ALARMS, "[]") ?: "[]")
+        } catch (_: Exception) { org.json.JSONArray() }
+        val filtered = org.json.JSONArray()
+        for (i in 0 until src.length()) {
+            val obj = src.optJSONObject(i) ?: continue
+            if (obj.optInt("hour") == hour &&
+                obj.optInt("minute") == minute &&
+                (label == null || obj.optString("label") == label)) continue
+            filtered.put(obj)
+        }
+        prefs.edit().putString(PREF_ALARMS, filtered.toString()).apply()
+        Log.d(TAG, "untrackAlarm: removed $hour:$minute '$label'")
     }
 
     // ─── Notification channels ───────────────────────────────────────────────

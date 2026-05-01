@@ -78,6 +78,9 @@ interface OpenCrowApi {
     @GET("v1/devices/tasks")
     suspend fun getDeviceTasks(@Query("target") target: String): Response<DeviceTasksResponse>
 
+    @GET("v1/devices/tasks/{id}")
+    suspend fun getDeviceTask(@Path("id") taskId: String): Response<DeviceTaskDto>
+
     @POST("v1/devices/tasks/{id}/complete")
     suspend fun completeDeviceTask(
         @Path("id") taskId: String,
