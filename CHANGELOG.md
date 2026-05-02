@@ -1,3 +1,10 @@
+## [1.4.1](https://github.com/d3vv3/openCrow-companion/compare/v1.4.0...v1.4.1) (2026-05-02)
+
+
+### Bug Fixes
+
+* Better tooling description ([1eb21e9](https://github.com/d3vv3/openCrow-companion/commit/1eb21e9c83ff149a4e6f1fb205cfbed6821d8a08))
+
 # [1.4.0](https://github.com/d3vv3/openCrow-companion/compare/v1.3.0...v1.4.0) (2026-05-02)
 
 
