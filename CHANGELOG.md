@@ -1,3 +1,10 @@
+# [1.4.0](https://github.com/d3vv3/openCrow-companion/compare/v1.3.0...v1.4.0) (2026-05-02)
+
+
+### Features
+
+* Show translate in context menu and show in share menu ([cd4256f](https://github.com/d3vv3/openCrow-companion/commit/cd4256f456dd18f61d9c3f4cf4f36f605a7c9f61))
+
 # [1.3.0](https://github.com/d3vv3/openCrow-companion/compare/v1.2.1...v1.3.0) (2026-05-01)
 
 
