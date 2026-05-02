@@ -90,14 +90,13 @@ class LocalToolExecutor(
                 "make_call"             -> makeCall(args)
                 "send_sms"              -> withContext(Dispatchers.Main) { sendSms(args) }
                 "create_calendar_event" -> createCalendarEvent(args)
-                "read_contacts"         -> readContacts(args)
+                "read_contacts", "search_contacts" -> readContacts(args)
                 "read_call_log"         -> readCallLog(args)
                 "read_calendar"         -> readCalendar(args)
                 "delete_calendar_event" -> deleteCalendarEvent(args)
-                "list_apps"             -> listApps(args)
-                "open_app"              -> openApp(args)
+                "list_apps"             -> listApps(args)                "open_app"              -> openApp(args)
                 "get_battery"           -> getBattery()
-                "get_location"          -> getLocation()
+                "get_location", "get_device_location" -> getLocation()
                 "set_volume"            -> setVolume(args)
                 "set_ringer_mode"       -> setRingerMode(args)
                 "read_sms"              -> readSms(args)
@@ -111,8 +110,9 @@ class LocalToolExecutor(
                 "start_stopwatch"       -> startStopwatch()
                 "list_alarms"           -> listAlarms()
                 "delete_alarm"          -> deleteAlarm(args)
-                "list_unified_push_distributors" -> listUnifiedPushDistributors()
-                "configure_unified_push" -> configureUnifiedPush(args)
+                "list_unified_push_distributors" -> manageUnifiedPush(emptyMap())
+                "configure_unified_push" -> manageUnifiedPush(args)
+                "manage_unified_push"    -> manageUnifiedPush(args)
                 else                    -> ToolResult(output = "Unknown local tool: $toolName", isError = true)
             }
         } catch (e: Exception) {
@@ -284,10 +284,10 @@ class LocalToolExecutor(
         }
 
         if (!ensurePermission(Manifest.permission.READ_CALENDAR)) {
-            return ToolResult(output = "READ_CALENDAR permission denied. Cannot create calendar event.", isError = true)
+            return ToolResult(output = "READ_CALENDAR permission denied. Ask the user to grant Calendar permission to the openCrow app in Android Settings > Apps > openCrow > Permissions.", isError = true)
         }
         if (!ensurePermission(Manifest.permission.WRITE_CALENDAR)) {
-            return ToolResult(output = "WRITE_CALENDAR permission denied. Cannot create calendar event.", isError = true)
+            return ToolResult(output = "WRITE_CALENDAR permission denied. Ask the user to grant Calendar permission to the openCrow app in Android Settings > Apps > openCrow > Permissions.", isError = true)
         }
 
         // Find the primary/default writable calendar
@@ -354,11 +354,11 @@ class LocalToolExecutor(
 
     private suspend fun readContacts(args: Map<String, Any>): ToolResult {
         if (!ensurePermission(Manifest.permission.READ_CONTACTS)) {
-            return ToolResult(output = "READ_CONTACTS permission denied.", isError = true)
+            return ToolResult(output = "READ_CONTACTS permission denied. Ask the user to grant Contacts permission to the openCrow app in Android Settings > Apps > openCrow > Permissions.", isError = true)
         }
-        val query = args["query"] as? String ?: ""
-        val limit = (args["limit"] as? Double)?.toInt() ?: 30
-        val results = mutableListOf<String>()
+        val query  = args["query"] as? String ?: ""
+        val limit  = (args["limit"] as? Double)?.toInt() ?: 30
+        val format = (args["response_format"] as? String ?: "detailed").lowercase()
         val uri = if (query.isNotBlank()) {
             Uri.withAppendedPath(ContactsContract.CommonDataKinds.Phone.CONTENT_FILTER_URI, Uri.encode(query))
         } else {
@@ -369,24 +369,33 @@ class LocalToolExecutor(
             arrayOf(ContactsContract.CommonDataKinds.Phone.DISPLAY_NAME, ContactsContract.CommonDataKinds.Phone.NUMBER),
             null, null, null
         )
+        data class Contact(val name: String, val phone: String)
+        val contacts = mutableListOf<Contact>()
         cursor?.use {
             var count = 0
             while (it.moveToNext() && count < limit) {
-                val name   = it.getString(0) ?: ""
-                val number = it.getString(1) ?: ""
-                results.add("$name: $number")
+                contacts.add(Contact(it.getString(0) ?: "", it.getString(1) ?: ""))
                 count++
             }
         }
-        return ToolResult(output = if (results.isEmpty()) "No contacts found" else results.joinToString("\n"))
+        if (contacts.isEmpty()) return ToolResult(output = if (query.isNotBlank()) "No contacts found matching '$query'" else "No contacts found")
+        return if (format == "concise") {
+            ToolResult(output = contacts.joinToString("\n") { "${it.name}: ${it.phone}" })
+        } else {
+            val arr = org.json.JSONArray(contacts.map { c ->
+                org.json.JSONObject().apply { put("name", c.name); put("phone", c.phone) }
+            })
+            ToolResult(output = arr.toString())
+        }
     }
 
     private suspend fun readCallLog(args: Map<String, Any>): ToolResult {
         if (!ensurePermission(Manifest.permission.READ_CALL_LOG)) {
-            return ToolResult(output = "READ_CALL_LOG permission denied.", isError = true)
+            return ToolResult(output = "READ_CALL_LOG permission denied. Ask the user to grant Call Log permission to the openCrow app in Android Settings > Apps > openCrow > Permissions.", isError = true)
         }
         val typeFilter = (args["type"] as? String ?: "all").lowercase()
-        val limit = (args["limit"] as? Double)?.toInt() ?: 10
+        val limit  = (args["limit"] as? Double)?.toInt() ?: 10
+        val format = (args["response_format"] as? String ?: "detailed").lowercase()
         val typeSelection = when (typeFilter) {
             "incoming" -> "${CallLog.Calls.TYPE} = ${CallLog.Calls.INCOMING_TYPE}"
             "outgoing" -> "${CallLog.Calls.TYPE} = ${CallLog.Calls.OUTGOING_TYPE}"
@@ -399,7 +408,8 @@ class LocalToolExecutor(
             typeSelection, null,
             "${CallLog.Calls.DATE} DESC"
         )
-        val results = mutableListOf<String>()
+        data class CallEntry(val name: String, val number: String, val type: String, val date: String, val durationSec: Long)
+        val calls = mutableListOf<CallEntry>()
         cursor?.use {
             var count = 0
             val numIdx  = it.getColumnIndex(CallLog.Calls.NUMBER)
@@ -416,18 +426,27 @@ class LocalToolExecutor(
                     CallLog.Calls.MISSED_TYPE   -> "missed"
                     else                        -> "other"
                 }
-                val date     = formatTime(it.getLong(dateIdx))
-                val duration = it.getLong(durIdx)
-                results.add("$name ($number) - $callType - $date - ${duration}s")
+                calls.add(CallEntry(name, number, callType, formatTime(it.getLong(dateIdx)), it.getLong(durIdx)))
                 count++
             }
         }
-        return ToolResult(output = if (results.isEmpty()) "No calls found" else results.joinToString("\n"))
+        if (calls.isEmpty()) return ToolResult(output = "No calls found")
+        return if (format == "concise") {
+            ToolResult(output = calls.joinToString("\n") { "${it.name} (${it.number}) - ${it.type} - ${it.date} - ${it.durationSec}s" })
+        } else {
+            val arr = org.json.JSONArray(calls.map { c ->
+                org.json.JSONObject().apply {
+                    put("name", c.name); put("number", c.number); put("type", c.type)
+                    put("date", c.date); put("duration_seconds", c.durationSec)
+                }
+            })
+            ToolResult(output = arr.toString())
+        }
     }
 
     private suspend fun readCalendar(args: Map<String, Any>): ToolResult {
         if (!ensurePermission(Manifest.permission.READ_CALENDAR)) {
-            return ToolResult(output = "READ_CALENDAR permission denied.", isError = true)
+            return ToolResult(output = "READ_CALENDAR permission denied. Ask the user to grant Calendar permission to the openCrow app in Android Settings > Apps > openCrow > Permissions.", isError = true)
         }
         val limit = (args["limit"] as? Double)?.toInt() ?: 10
         val now = System.currentTimeMillis()
@@ -443,7 +462,7 @@ class LocalToolExecutor(
             arrayOf(now.toString()),
             "${CalendarContract.Events.DTSTART} ASC"
         )
-        val results = mutableListOf<String>()
+        val events = mutableListOf<org.json.JSONObject>()
         cursor?.use {
             var count = 0
             while (it.moveToNext() && count < limit) {
@@ -451,11 +470,15 @@ class LocalToolExecutor(
                 val title = it.getString(1) ?: "Untitled"
                 val start = it.getLong(2)
                 val end   = it.getLong(3)
-                results.add("[id=$id] $title (${formatTime(start)} - ${formatTime(end)})")
+                events.add(org.json.JSONObject().apply {
+                    put("id", id); put("title", title)
+                    put("start", formatTime(start)); put("end", formatTime(end))
+                })
                 count++
             }
         }
-        return ToolResult(output = if (results.isEmpty()) "No upcoming events found" else results.joinToString("\n"))
+        if (events.isEmpty()) return ToolResult(output = "No upcoming events found")
+        return ToolResult(output = org.json.JSONArray(events).toString())
     }
 
     private suspend fun deleteCalendarEvent(args: Map<String, Any>): ToolResult {
@@ -468,7 +491,7 @@ class LocalToolExecutor(
         } ?: return ToolResult(output = "event_id is required and must be a number", isError = true)
 
         if (!ensurePermission(Manifest.permission.WRITE_CALENDAR)) {
-            return ToolResult(output = "WRITE_CALENDAR permission denied. Cannot delete calendar event.", isError = true)
+            return ToolResult(output = "WRITE_CALENDAR permission denied. Ask the user to grant Calendar permission to the openCrow app in Android Settings > Apps > openCrow > Permissions.", isError = true)
         }
 
         return withContext(Dispatchers.IO) {
@@ -487,8 +510,9 @@ class LocalToolExecutor(
     }
 
     private fun listApps(args: Map<String, Any>): ToolResult {
-        val query = (args["query"] as? String)?.lowercase() ?: ""
-        val limit = (args["limit"] as? Double)?.toInt() ?: 20
+        val query  = (args["query"] as? String)?.lowercase() ?: ""
+        val limit  = (args["limit"] as? Double)?.toInt() ?: 20
+        val format = (args["response_format"] as? String ?: "detailed").lowercase()
         val pm = context.packageManager
         val intent = Intent(Intent.ACTION_MAIN).apply { addCategory(Intent.CATEGORY_LAUNCHER) }
         @Suppress("QueryPermissionsNeeded")
@@ -500,17 +524,26 @@ class LocalToolExecutor(
                 isError = true
             )
         }
+        data class AppEntry(val name: String, val pkg: String)
         val apps = activities
             .mapNotNull { ri ->
                 val label = ri.loadLabel(pm).toString()
                 val pkg   = ri.activityInfo.packageName
                 if (query.isBlank() || label.lowercase().contains(query) || pkg.lowercase().contains(query))
-                    "$label ($pkg)"
+                    AppEntry(label, pkg)
                 else null
             }
-            .sorted()
+            .sortedBy { it.name }
             .take(limit)
-        return ToolResult(output = if (apps.isEmpty()) "No apps matched '$query'" else apps.joinToString("\n"))
+        if (apps.isEmpty()) return ToolResult(output = "No apps matched '$query'")
+        return if (format == "concise") {
+            ToolResult(output = apps.joinToString("\n") { "${it.name} (${it.pkg})" })
+        } else {
+            val arr = org.json.JSONArray(apps.map { a ->
+                org.json.JSONObject().apply { put("name", a.name); put("package", a.pkg) }
+            })
+            ToolResult(output = arr.toString())
+        }
     }
 
     private suspend fun openApp(args: Map<String, Any>): ToolResult {
@@ -551,24 +584,27 @@ class LocalToolExecutor(
             BatteryManager.BATTERY_STATUS_CHARGING     -> "charging"
             BatteryManager.BATTERY_STATUS_FULL         -> "full"
             BatteryManager.BATTERY_STATUS_DISCHARGING  -> "discharging"
-            BatteryManager.BATTERY_STATUS_NOT_CHARGING -> "not charging"
+            BatteryManager.BATTERY_STATUS_NOT_CHARGING -> "not_charging"
             else                                        -> "unknown"
         }
-        return ToolResult(output = "Battery: $level% ($statusStr)")
+        val json = org.json.JSONObject().apply {
+            put("level_percent", level)
+            put("status", statusStr)
+        }
+        return ToolResult(output = json.toString())
     }
 
     private suspend fun getLocation(): ToolResult {
         if (!ensurePermission(Manifest.permission.ACCESS_FINE_LOCATION)) {
             if (!ensurePermission(Manifest.permission.ACCESS_COARSE_LOCATION)) {
-                return ToolResult(output = "Location permission denied.", isError = true)
+                return ToolResult(output = "Location permission denied. Ask the user to grant location permission to the openCrow app in Android Settings > Apps > openCrow > Permissions.", isError = true)
             }
         }
         return withContext(Dispatchers.IO) {
             try {
                 val lm = context.getSystemService(Context.LOCATION_SERVICE) as LocationManager
                 val providers = lm.getProviders(true)
-                if (providers.isEmpty()) return@withContext ToolResult(output = "No location providers available.", isError = true)
-                // Try to get last known location from best provider
+                if (providers.isEmpty()) return@withContext ToolResult(output = "No location providers available. Ask the user to enable GPS in device settings.", isError = true)
                 var best: android.location.Location? = null
                 for (provider in providers) {
                     try {
@@ -580,9 +616,15 @@ class LocalToolExecutor(
                     } catch (_: Exception) {}
                 }
                 if (best != null) {
-                    ToolResult(output = "Location: lat=${best.latitude}, lon=${best.longitude}, accuracy=${best.accuracy}m, provider=${best.provider}")
+                    val json = org.json.JSONObject().apply {
+                        put("latitude",  best.latitude)
+                        put("longitude", best.longitude)
+                        put("accuracy_meters", best.accuracy)
+                        put("provider", best.provider ?: "unknown")
+                    }
+                    ToolResult(output = json.toString())
                 } else {
-                    ToolResult(output = "Location not available. Please ensure GPS is enabled and try again.", isError = true)
+                    ToolResult(output = "Location not available. Ask the user to ensure GPS is enabled and try again.", isError = true)
                 }
             } catch (e: Exception) {
                 ToolResult(output = "Failed to get location: ${e.message}", isError = true)
@@ -629,7 +671,7 @@ class LocalToolExecutor(
 
     private suspend fun readSms(args: Map<String, Any>): ToolResult {
         if (!ensurePermission(Manifest.permission.READ_SMS)) {
-            return ToolResult(output = "READ_SMS permission denied.", isError = true)
+            return ToolResult(output = "READ_SMS permission denied. Ask the user to grant SMS permission to the openCrow app in Android Settings > Apps > openCrow > Permissions.", isError = true)
         }
         val typeFilter = (args["type"] as? String ?: "inbox").lowercase()
         val limit = (args["limit"] as? Double)?.toInt() ?: 10
@@ -644,7 +686,7 @@ class LocalToolExecutor(
             null, null,
             "date DESC"
         )
-        val results = mutableListOf<String>()
+        val messages = mutableListOf<org.json.JSONObject>()
         cursor?.use {
             var count = 0
             val addrIdx = it.getColumnIndex("address")
@@ -654,17 +696,23 @@ class LocalToolExecutor(
                 val addr = it.getString(addrIdx) ?: "unknown"
                 val body = it.getString(bodyIdx)?.take(200) ?: ""
                 val date = formatTime(it.getLong(dateIdx))
-                results.add("[$date] $addr: $body")
+                messages.add(org.json.JSONObject().apply {
+                    put("from", addr); put("body", body); put("date", date)
+                })
                 count++
             }
         }
-        return ToolResult(output = if (results.isEmpty()) "No messages found" else results.joinToString("\n"))
+        if (messages.isEmpty()) return ToolResult(output = "No messages found")
+        return ToolResult(output = org.json.JSONArray(messages).toString())
     }
 
     private fun getWifiInfo(): ToolResult {
         return try {
             val wm = context.applicationContext.getSystemService(Context.WIFI_SERVICE) as WifiManager
-            if (!wm.isWifiEnabled) return ToolResult(output = "WiFi is disabled")
+            if (!wm.isWifiEnabled) {
+                val json = org.json.JSONObject().apply { put("connected", false) }
+                return ToolResult(output = json.toString())
+            }
             @Suppress("DEPRECATION")
             val info = wm.connectionInfo
             @Suppress("DEPRECATION")
@@ -675,22 +723,31 @@ class LocalToolExecutor(
             @Suppress("DEPRECATION")
             val ipInt = info.ipAddress
             val ip = "${ipInt and 0xff}.${(ipInt shr 8) and 0xff}.${(ipInt shr 16) and 0xff}.${(ipInt shr 24) and 0xff}"
-            ToolResult(output = "WiFi: SSID=$ssid, signal=$level/4, IP=$ip, RSSI=${rssi}dBm")
+            val json = org.json.JSONObject().apply {
+                put("connected", true)
+                put("ssid", ssid)
+                put("signal_level", level)
+                put("ip", ip)
+                put("rssi_dbm", rssi)
+            }
+            ToolResult(output = json.toString())
         } catch (e: Exception) {
             ToolResult(output = "Failed to get WiFi info: ${e.message}", isError = true)
         }
     }
 
     private fun getDeviceInfo(): ToolResult {
-        val model   = Build.MODEL
-        val brand   = Build.BRAND
-        val version = Build.VERSION.RELEASE
-        val sdk     = Build.VERSION.SDK_INT
         val display = context.resources.displayMetrics
         val density = display.density
-        val widthDp  = (display.widthPixels / density).toInt()
-        val heightDp = (display.heightPixels / density).toInt()
-        return ToolResult(output = "Device: $brand $model, Android $version (API $sdk), screen: ${widthDp}x${heightDp}dp")
+        val json = org.json.JSONObject().apply {
+            put("brand",           Build.BRAND)
+            put("model",           Build.MODEL)
+            put("android_version", Build.VERSION.RELEASE)
+            put("api_level",       Build.VERSION.SDK_INT)
+            put("screen_width_dp",  (display.widthPixels  / density).toInt())
+            put("screen_height_dp", (display.heightPixels / density).toInt())
+        }
+        return ToolResult(output = json.toString())
     }
 
     private fun sendNotification(args: Map<String, Any>): ToolResult {
@@ -1127,46 +1184,40 @@ class LocalToolExecutor(
 
     // ─── UnifiedPush tools ───────────────────────────────────────────────────
 
-    private fun listUnifiedPushDistributors(): ToolResult {
+    /**
+     * Combined list + configure tool.
+     * With no 'distributor' arg: lists available distributors and the active one.
+     * With 'distributor' arg: activates it and registers with the server.
+     */
+    private suspend fun manageUnifiedPush(args: Map<String, Any>): ToolResult {
+        val distributor = args["distributor"] as? String
+
         val distributors = org.unifiedpush.android.connector.UnifiedPush.getDistributors(context)
         val active = org.unifiedpush.android.connector.UnifiedPush.getAckDistributor(context)
-        val result = buildString {
-            if (distributors.isEmpty()) {
-                append("No UnifiedPush distributor apps are installed on this device.")
-            } else {
-                append("Available UnifiedPush distributors (${distributors.size}):\n")
-                for (d in distributors) {
-                    val marker = if (d == active) " [active]" else ""
-                    append("- $d$marker\n")
-                }
-                if (active.isNullOrEmpty()) {
-                    append("\nNo distributor is currently active. Use configure_unified_push to set one.")
-                }
-            }
-        }
-        return ToolResult(output = result)
-    }
 
-    private suspend fun configureUnifiedPush(args: Map<String, Any>): ToolResult {
-        val distributor = args["distributor"] as? String
-            ?: return ToolResult(output = "Missing required argument: distributor", isError = true)
-        val available = org.unifiedpush.android.connector.UnifiedPush.getDistributors(context)
-        if (distributor !in available) {
+        if (distributor == null) {
+            // List mode
+            val json = org.json.JSONObject().apply {
+                put("available", org.json.JSONArray(distributors))
+                put("active", active ?: org.json.JSONObject.NULL)
+            }
+            return ToolResult(output = json.toString())
+        }
+
+        // Configure mode
+        if (distributor !in distributors) {
             return ToolResult(
-                output = "Distributor '$distributor' is not installed. Available: ${available.joinToString()}",
+                output = "Distributor '$distributor' is not installed. Available: ${distributors.joinToString()}",
                 isError = true
             )
         }
         org.unifiedpush.android.connector.UnifiedPush.saveDistributor(context, distributor)
-        // Retrieve deviceId for the instance parameter
         val deviceId = apiClient.getDeviceId() ?: ""
-        Log.i(TAG, "configureUnifiedPush: saving distributor='$distributor', calling register with instance='$deviceId'")
+        Log.i(TAG, "manageUnifiedPush: saving distributor='$distributor', calling register with instance='$deviceId'")
         org.unifiedpush.android.connector.UnifiedPush.register(context, instance = deviceId)
 
-        // If a push endpoint is already stored (from a previous registration or early UP setup),
-        // register it with the server immediately rather than waiting for onNewEndpoint.
         val storedEndpoint = apiClient.getPushEndpoint()
-        Log.i(TAG, "configureUnifiedPush: storedEndpoint='$storedEndpoint'")
+        Log.i(TAG, "manageUnifiedPush: storedEndpoint='$storedEndpoint'")
         if (!storedEndpoint.isNullOrEmpty() && deviceId.isNotEmpty()) {
             return try {
                 val resp = apiClient.api.registerDevice(
@@ -1177,15 +1228,15 @@ class LocalToolExecutor(
                     )
                 )
                 if (resp.isSuccessful) {
-                    Log.i(TAG, "configureUnifiedPush: server updated with existing endpoint=$storedEndpoint")
-                    ToolResult(output = "UnifiedPush distributor set to '$distributor'. Push endpoint registered with server. You can now send push notifications to this device.")
+                    Log.i(TAG, "manageUnifiedPush: server updated with existing endpoint=$storedEndpoint")
+                    ToolResult(output = "UnifiedPush distributor set to '$distributor'. Push endpoint registered with server.")
                 } else {
-                    Log.w(TAG, "configureUnifiedPush: server rejected endpoint registration: ${resp.code()}")
+                    Log.w(TAG, "manageUnifiedPush: server rejected endpoint registration: ${resp.code()}")
                     ToolResult(output = "UnifiedPush distributor set to '$distributor' and registration requested. (Server returned ${resp.code()} when registering endpoint.)")
                 }
             } catch (e: Exception) {
-                Log.e(TAG, "configureUnifiedPush: failed to register endpoint with server: ${e.message}")
-                ToolResult(output = "UnifiedPush distributor set to '$distributor' and registration requested. (Could not reach server to register endpoint: ${e.message})")
+                Log.e(TAG, "manageUnifiedPush: failed to register endpoint with server: ${e.message}")
+                ToolResult(output = "UnifiedPush distributor set to '$distributor' and registration requested. (Could not reach server: ${e.message})")
             }
         }
 

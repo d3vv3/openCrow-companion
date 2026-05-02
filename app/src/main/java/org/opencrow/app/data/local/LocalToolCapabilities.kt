@@ -81,25 +81,27 @@ object LocalToolCapabilities {
             )
         ),
         DeviceCapability(
-            name = "read_contacts",
-            description = "Search or list contacts from the phone's address book",
+            name = "search_contacts",
+            description = "Search or list contacts from the phone's address book. Returns a JSON array of {name, phone} objects. Use response_format='concise' to get a compact 'Name: number' list instead. Always provide a query when looking for a specific person rather than listing all contacts.",
             parameters = mapOf(
                 "type" to "object",
                 "properties" to mapOf(
-                    "query" to mapOf("type" to "string",  "description" to "Search query (optional, returns all if omitted)"),
-                    "limit" to mapOf("type" to "integer", "description" to "Maximum number of results (default 30)")
+                    "query"           to mapOf("type" to "string",  "description" to "Search query to filter contacts by name or number. Omit to return all contacts up to the limit."),
+                    "limit"           to mapOf("type" to "integer", "description" to "Maximum number of results (default 30)"),
+                    "response_format" to mapOf("type" to "string",  "description" to "'detailed' (default, JSON array) or 'concise' (one 'Name: number' per line, ~3x fewer tokens)")
                 ),
                 "required" to listOf<String>()
             )
         ),
         DeviceCapability(
             name = "read_call_log",
-            description = "Read recent call history from the phone (incoming, outgoing, missed calls)",
+            description = "Read recent call history from the phone (incoming, outgoing, missed). Returns a JSON array of {name, number, type, date, duration_seconds} objects. Use response_format='concise' for a compact one-line-per-call summary.",
             parameters = mapOf(
                 "type" to "object",
                 "properties" to mapOf(
-                    "type"  to mapOf("type" to "string",  "description" to "Filter by call type: 'all', 'incoming', 'outgoing', 'missed' (default: 'all')"),
-                    "limit" to mapOf("type" to "integer", "description" to "Maximum number of calls to return (default 10)")
+                    "type"            to mapOf("type" to "string",  "description" to "Filter by call type: 'all', 'incoming', 'outgoing', 'missed' (default: 'all')"),
+                    "limit"           to mapOf("type" to "integer", "description" to "Maximum number of calls to return (default 10)"),
+                    "response_format" to mapOf("type" to "string",  "description" to "'detailed' (default, JSON array) or 'concise' (one summary line per call)")
                 ),
                 "required" to listOf<String>()
             )
@@ -128,12 +130,13 @@ object LocalToolCapabilities {
         ),
         DeviceCapability(
             name = "list_apps",
-            description = "List installed apps on the device, optionally filtered by name",
+            description = "List installed apps on the device, optionally filtered by name. Returns a JSON array of {name, package} objects. Use response_format='concise' for a compact 'Name (package)' list. To launch an app, use open_app with the package name.",
             parameters = mapOf(
                 "type" to "object",
                 "properties" to mapOf(
-                    "query" to mapOf("type" to "string",  "description" to "Optional name filter (case-insensitive)"),
-                    "limit" to mapOf("type" to "integer", "description" to "Maximum number of apps to return (default 20)")
+                    "query"           to mapOf("type" to "string",  "description" to "Optional name filter (case-insensitive)"),
+                    "limit"           to mapOf("type" to "integer", "description" to "Maximum number of apps to return (default 20)"),
+                    "response_format" to mapOf("type" to "string",  "description" to "'detailed' (default, JSON array) or 'concise' (one 'Name (package)' per line)")
                 ),
                 "required" to listOf<String>()
             )
@@ -152,7 +155,7 @@ object LocalToolCapabilities {
         ),
         DeviceCapability(
             name = "get_battery",
-            description = "Get the current battery level and charging state of the device",
+            description = "Get the current battery level and charging state of the device. Returns JSON: {level_percent, status} where status is 'charging', 'discharging', 'full', or 'not_charging'.",
             parameters = mapOf(
                 "type" to "object",
                 "properties" to emptyMap<String, Any>(),
@@ -160,8 +163,8 @@ object LocalToolCapabilities {
             )
         ),
         DeviceCapability(
-            name = "get_location",
-            description = "Get the device's current GPS location (latitude, longitude, accuracy). Requires location permission.",
+            name = "get_device_location",
+            description = "Get the device's current GPS location (latitude, longitude, accuracy in metres). Returns structured JSON. Requires location permission. Use this for the physical device location; use get_location (server tool) for IP-based geolocation.",
             parameters = mapOf(
                 "type" to "object",
                 "properties" to emptyMap<String, Any>(),
@@ -193,7 +196,7 @@ object LocalToolCapabilities {
         ),
         DeviceCapability(
             name = "read_sms",
-            description = "Read recent SMS messages from the phone",
+            description = "Read recent SMS messages from the phone. Returns a JSON array of {from, body, date}. Message bodies are truncated at 200 characters.",
             parameters = mapOf(
                 "type" to "object",
                 "properties" to mapOf(
@@ -205,7 +208,7 @@ object LocalToolCapabilities {
         ),
         DeviceCapability(
             name = "get_wifi_info",
-            description = "Get current WiFi connection info (SSID, signal strength, IP address)",
+            description = "Get current WiFi connection info. Returns JSON: {connected, ssid, signal_level, ip, rssi_dbm} or {connected: false} if WiFi is off.",
             parameters = mapOf(
                 "type" to "object",
                 "properties" to emptyMap<String, Any>(),
@@ -214,7 +217,7 @@ object LocalToolCapabilities {
         ),
         DeviceCapability(
             name = "get_device_info",
-            description = "Get basic device information (model, Android version, screen info)",
+            description = "Get basic device information. Returns JSON: {brand, model, android_version, api_level, screen_width_dp, screen_height_dp}.",
             parameters = mapOf(
                 "type" to "object",
                 "properties" to emptyMap<String, Any>(),
@@ -309,23 +312,14 @@ object LocalToolCapabilities {
             )
         ),
         DeviceCapability(
-            name = "list_unified_push_distributors",
-            description = "List all available UnifiedPush distributor apps installed on the device and which one is currently active",
-            parameters = mapOf(
-                "type" to "object",
-                "properties" to emptyMap<String, Any>(),
-                "required" to listOf<String>()
-            )
-        ),
-        DeviceCapability(
-            name = "configure_unified_push",
-            description = "Set the active UnifiedPush distributor on the device and register for push notifications. Use list_unified_push_distributors first to get available distributor package names.",
+            name = "manage_unified_push",
+            description = "List available UnifiedPush distributor apps and optionally activate one. Call with no arguments to list distributors and see which is active. Provide 'distributor' to set the active distributor and register for push notifications.",
             parameters = mapOf(
                 "type" to "object",
                 "properties" to mapOf(
-                    "distributor" to mapOf("type" to "string", "description" to "Package name of the UnifiedPush distributor app to use (e.g. 'org.unifiedpush.distributor.ntfy')")
+                    "distributor" to mapOf("type" to "string", "description" to "Package name of the UnifiedPush distributor to activate (e.g. 'org.unifiedpush.distributor.ntfy'). Omit to only list available distributors.")
                 ),
-                "required" to listOf("distributor")
+                "required" to listOf<String>()
             )
         )
     )
