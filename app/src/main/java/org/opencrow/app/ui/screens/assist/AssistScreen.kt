@@ -18,12 +18,14 @@ import androidx.compose.foundation.gestures.detectVerticalDragGestures
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.ui.draw.alpha
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.AttachFile
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Fullscreen
 import androidx.compose.material.icons.filled.Mic
@@ -51,6 +53,7 @@ import androidx.lifecycle.viewmodel.compose.viewModel
 import coil.compose.AsyncImage
 import coil.request.ImageRequest
 import org.opencrow.app.OpenCrowApp
+import org.opencrow.app.ui.screens.chat.Attachment
 import org.opencrow.app.ui.screens.chat.components.MessageBubble
 import org.opencrow.app.ui.screens.chat.components.ThinkingBubble
 import org.opencrow.app.ui.theme.LocalSpacing
@@ -299,7 +302,9 @@ fun AssistScreen(
                                     ) == PackageManager.PERMISSION_GRANTED
                                 ) viewModel.startRecording(context)
                             },
-                            onStopRecording = { viewModel.stopRecordingAndTranscribe() }
+                            onStopRecording = { viewModel.stopRecordingAndTranscribe() },
+                            attachments = state.attachments,
+                            onRemoveAttachment = viewModel::removeAttachment
                         )
                     }
                 }
@@ -433,7 +438,9 @@ private fun AssistInputBar(
     recording: Boolean,
     transcribing: Boolean,
     onStartRecording: () -> Unit,
-    onStopRecording: () -> Unit
+    onStopRecording: () -> Unit,
+    attachments: List<Attachment> = emptyList(),
+    onRemoveAttachment: (String) -> Unit = {}
 ) {
     val spacing = LocalSpacing.current
 
@@ -448,12 +455,26 @@ private fun AssistInputBar(
             shadowElevation = 8.dp,
             modifier = Modifier.fillMaxWidth()
         ) {
-            Row(
-                modifier = Modifier
-                    .padding(horizontal = spacing.sm, vertical = spacing.sm),
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(spacing.xs)
-            ) {
+            Column {
+                // Attachment preview chips
+                if (attachments.isNotEmpty()) {
+                    LazyRow(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(horizontal = spacing.sm, vertical = spacing.xs),
+                        horizontalArrangement = Arrangement.spacedBy(spacing.xs)
+                    ) {
+                        items(attachments, key = { it.id }) { att ->
+                            AttachmentChip(attachment = att, onRemove = { onRemoveAttachment(att.id) })
+                        }
+                    }
+                }
+                Row(
+                    modifier = Modifier
+                        .padding(horizontal = spacing.sm, vertical = spacing.sm),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(spacing.xs)
+                ) {
                 // Keep as State<Float> (no `by`) so value is read in drawBehind (draw phase)
                 // not composition phase -- prevents full recomposition every animation frame
                 val recordingPulseAlpha = rememberInfiniteTransition(label = "pulse").animateFloat(
@@ -520,7 +541,7 @@ private fun AssistInputBar(
 
                 FilledIconButton(
                     onClick = onSend,
-                    enabled = composing.isNotBlank() && !sending,
+                    enabled = (composing.isNotBlank() || attachments.isNotEmpty()) && !sending,
                     modifier = Modifier.size(40.dp),
                     shape = RoundedCornerShape(12.dp),
                     colors = IconButtonDefaults.filledIconButtonColors(
@@ -536,6 +557,58 @@ private fun AssistInputBar(
                         modifier = Modifier.size(18.dp)
                     )
                 }
+            }
+            }
+        }
+    }
+}
+
+@Composable
+private fun AttachmentChip(attachment: Attachment, onRemove: () -> Unit) {
+    val spacing = LocalSpacing.current
+    Surface(
+        shape = RoundedCornerShape(16.dp),
+        color = MaterialTheme.colorScheme.primaryContainer,
+        border = androidx.compose.foundation.BorderStroke(1.5.dp, MaterialTheme.colorScheme.primary),
+        modifier = Modifier.height(40.dp)
+    ) {
+        Row(
+            modifier = Modifier.padding(horizontal = spacing.md),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(6.dp)
+        ) {
+            if (attachment.isImage) {
+                AsyncImage(
+                    model = attachment.uri,
+                    contentDescription = null,
+                    modifier = Modifier
+                        .size(26.dp)
+                        .clip(RoundedCornerShape(8.dp)),
+                    contentScale = ContentScale.Crop
+                )
+            } else {
+                Icon(
+                    Icons.Filled.AttachFile,
+                    contentDescription = null,
+                    modifier = Modifier.size(18.dp),
+                    tint = MaterialTheme.colorScheme.onPrimaryContainer
+                )
+            }
+            Text(
+                text = attachment.name.take(24),
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onPrimaryContainer
+            )
+            IconButton(
+                onClick = onRemove,
+                modifier = Modifier.size(24.dp)
+            ) {
+                Icon(
+                    Icons.Filled.Close,
+                    contentDescription = "Remove",
+                    modifier = Modifier.size(18.dp),
+                    tint = MaterialTheme.colorScheme.onPrimaryContainer.copy(alpha = 0.7f)
+                )
             }
         }
     }

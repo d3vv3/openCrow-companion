@@ -20,6 +20,7 @@ import org.opencrow.app.data.remote.ApiClient
 import org.opencrow.app.data.remote.dto.*
 import java.text.SimpleDateFormat
 import java.util.*
+import java.util.TimeZone
 
 class HeartbeatWorker(
     context: Context,
@@ -57,6 +58,15 @@ class HeartbeatWorker(
             // ── 2. Fetch heartbeat config (prompt + interval) from server ──
             val heartbeatConfig = fetchHeartbeatConfig(apiClient)
             val serverPromptTemplate = heartbeatConfig?.heartbeatPrompt?.takeIf { it.isNotBlank() }
+
+            // Enforce active hours window. If we're outside the configured window, bail out
+            // without sending a heartbeat. WorkManager will re-fire at the next interval and
+            // the check will pass once the window opens again.
+            if (heartbeatConfig != null && !isWithinActiveHours(heartbeatConfig)) {
+                Log.i(TAG, "Skipping heartbeat: outside active hours " +
+                    "(${heartbeatConfig.activeHoursStart}-${heartbeatConfig.activeHoursEnd} ${heartbeatConfig.timezone})")
+                return Result.success()
+            }
 
             // Reschedule with server's interval if it differs from current schedule
             // WorkManager enforces a minimum of 15 minutes regardless.
@@ -338,6 +348,39 @@ If anything needs attention, respond concisely with what changed and what action
             .setAutoCancel(true)
             .build()
         nm.notify(NOTIF_ID_HEARTBEAT, notif)
+    }
+
+    /**
+     * Returns true if the current local time falls within the configured active hours window.
+     * Both [HeartbeatConfigDto.activeHoursStart] and [HeartbeatConfigDto.activeHoursEnd] are "HH:MM" strings
+     * (24-hour). [HeartbeatConfigDto.timezone] is an IANA timezone name (e.g. "Europe/Berlin").
+     * If either bound is null/blank the window is considered always-open.
+     */
+    private fun isWithinActiveHours(config: HeartbeatConfigDto): Boolean {
+        val startStr = config.activeHoursStart?.takeIf { it.isNotBlank() } ?: return true
+        val endStr   = config.activeHoursEnd?.takeIf   { it.isNotBlank() } ?: return true
+
+        val tz = try {
+            TimeZone.getTimeZone(config.timezone?.takeIf { it.isNotBlank() } ?: "UTC")
+        } catch (_: Exception) {
+            TimeZone.getTimeZone("UTC")
+        }
+
+        val now = Calendar.getInstance(tz)
+        val nowMinutes = now.get(Calendar.HOUR_OF_DAY) * 60 + now.get(Calendar.MINUTE)
+
+        fun parseMinutes(hhmm: String): Int? {
+            val parts = hhmm.split(":")
+            if (parts.size != 2) return null
+            val h = parts[0].toIntOrNull() ?: return null
+            val m = parts[1].toIntOrNull() ?: return null
+            return h * 60 + m
+        }
+
+        val startMinutes = parseMinutes(startStr) ?: return true
+        val endMinutes   = parseMinutes(endStr)   ?: return true
+
+        return nowMinutes in startMinutes until endMinutes
     }
 
     private suspend fun completeTasks(apiClient: ApiClient, tasks: List<DeviceTaskDto>, response: String?) {

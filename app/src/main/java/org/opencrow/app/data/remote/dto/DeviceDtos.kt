@@ -56,5 +56,8 @@ data class HeartbeatConfigDto(
     val userId: String?,
     val enabled: Boolean,
     val intervalSeconds: Int,
-    val heartbeatPrompt: String?
+    val heartbeatPrompt: String?,
+    val activeHoursStart: String?,
+    val activeHoursEnd: String?,
+    val timezone: String?
 )

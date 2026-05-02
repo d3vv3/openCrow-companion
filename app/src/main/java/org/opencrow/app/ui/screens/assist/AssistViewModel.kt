@@ -49,7 +49,8 @@ data class AssistUiState(
     val attachmentsByMessageId: Map<String, List<Attachment>> = emptyMap(),
     val pendingPermission: String? = null,
     val ttsEnabled: Boolean = false,
-    val ttsAvailable: Boolean = false
+    val ttsAvailable: Boolean = false,
+    val attachments: List<Attachment> = emptyList()
 )
 
 class AssistViewModel(
@@ -171,6 +172,7 @@ class AssistViewModel(
                 screenshotAvailable = current.screenshotAvailable,
                 ttsEnabled = current.ttsEnabled,
                 ttsAvailable = current.ttsAvailable
+                // attachments intentionally cleared
             )
         }
         streamingBuffer.clear()
@@ -196,13 +198,44 @@ class AssistViewModel(
         _uiState.update { it.copy(composing = text) }
     }
 
+    fun addAttachments(newAttachments: List<Attachment>) {
+        _uiState.update { it.copy(attachments = it.attachments + newAttachments) }
+    }
+
+    fun removeAttachment(id: String) {
+        _uiState.update { state -> state.copy(attachments = state.attachments.filter { it.id != id }) }
+    }
+
+    fun clearAttachments() {
+        _uiState.update { it.copy(attachments = emptyList()) }
+    }
+
+    /**
+     * Pre-fills the composing field and immediately sends the message.
+     * Used when the activity is launched with a pre-determined prompt (e.g. Translate action).
+     */
+    fun setInitialMessage(text: String) {
+        _uiState.update { it.copy(composing = text) }
+        sendMessage(text)
+    }
+
+    /**
+     * Pre-fills the composing field WITHOUT sending.
+     * Used when the activity is launched via the share menu so the user can
+     * optionally type a message before sending.
+     */
+    fun setInitialComposing(text: String) {
+        _uiState.update { it.copy(composing = text) }
+    }
+
     fun sendMessage(text: String = _uiState.value.composing) {
         val trimmed = text.trim()
-        if (trimmed.isBlank()) return
+        val pendingAttachments = _uiState.value.attachments
+        if (trimmed.isBlank() && pendingAttachments.isEmpty()) return
         if (_uiState.value.sending || _uiState.value.streaming) return
 
         val shouldAttachScreenshot = _uiState.value.attachScreenshot && _uiState.value.screenshotPath != null
-        _uiState.update { it.copy(sending = true, composing = "", error = null) }
+        _uiState.update { it.copy(sending = true, composing = "", error = null, attachments = emptyList()) }
 
         viewModelScope.launch {
             try {
@@ -211,7 +244,10 @@ class AssistViewModel(
 
                 // Create conversation if needed
                 if (convId == null) {
-                    val title = trimmed.take(50)
+                    val title = trimmed.take(50).ifBlank {
+                        if (pendingAttachments.isNotEmpty()) "Shared ${pendingAttachments.size} file(s)"
+                        else "New conversation"
+                    }
                     val newConv = repository.createConversation(title)
                     if (newConv != null) {
                         convId = newConv.id
@@ -241,14 +277,30 @@ class AssistViewModel(
                     }
                 } else null
 
-                val messageContent = if (shouldAttachScreenshot) {
+                val messageContent = if (shouldAttachScreenshot && pendingAttachments.isEmpty()) {
                     buildMessageWithScreenshot(trimmed, _uiState.value.screenshotPath!!)
+                } else if (pendingAttachments.isNotEmpty()) {
+                    val allAttachments = if (shouldAttachScreenshot) {
+                        val screenshotAtt = Attachment(
+                            uri = android.net.Uri.fromFile(File(_uiState.value.screenshotPath!!)),
+                            name = "Screenshot",
+                            mimeType = "image/jpeg"
+                        )
+                        listOf(screenshotAtt) + pendingAttachments
+                    } else pendingAttachments
+                    buildMessageWithAttachments(trimmed, allAttachments)
                 } else {
                     trimmed
                 }
 
                 // Display content for the optimistic message (no base64 blob in text)
-                val displayContent = trimmed
+                val displayContent = buildString {
+                    if (trimmed.isNotBlank()) append(trimmed)
+                    for (att in pendingAttachments.filter { !it.isImage }) {
+                        if (isNotEmpty()) append("\n")
+                        append("📎 ${att.name}")
+                    }
+                }.ifBlank { trimmed }
 
                 // Optimistic user message
                 val tempMsg = MessageDto(
@@ -267,12 +319,13 @@ class AssistViewModel(
                             bytes = screenshotBytes
                         )
                     } else null
+                    val allVisualAttachments = listOfNotNull(screenshotAttachment) + pendingAttachments
                     it.copy(
                         messages = it.messages + tempMsg,
                         // Once sent, disable the screenshot toggle so it's not re-sent
                         attachScreenshot = false,
-                        attachmentsByMessageId = if (screenshotAttachment != null)
-                            it.attachmentsByMessageId + (tempMsg.id to listOf(screenshotAttachment))
+                        attachmentsByMessageId = if (allVisualAttachments.isNotEmpty())
+                            it.attachmentsByMessageId + (tempMsg.id to allVisualAttachments)
                         else it.attachmentsByMessageId
                     )
                 }
@@ -443,6 +496,54 @@ class AssistViewModel(
         if (dataUri != null) parts.add("![screenshot]($dataUri)")
         if (text.isNotBlank()) parts.add(text)
         
+        return parts.joinToString("\n\n")
+    }
+
+    private suspend fun buildMessageWithAttachments(
+        text: String,
+        attachments: List<Attachment>
+    ): String {
+        if (attachments.isEmpty()) return text
+        val parts = mutableListOf<String>()
+        for (attachment in attachments) {
+            if (attachment.isImage) {
+                val dataUri = withContext(Dispatchers.IO) {
+                    try {
+                        val bytes = appContext.contentResolver.openInputStream(attachment.uri)?.use {
+                            it.readBytes()
+                        } ?: return@withContext null
+                        val base64 = Base64.encodeToString(bytes, Base64.NO_WRAP)
+                        val mime = attachment.mimeType ?: "image/png"
+                        "data:$mime;base64,$base64"
+                    } catch (e: Exception) {
+                        Log.e(TAG, "Failed to read attachment ${attachment.name}", e)
+                        null
+                    }
+                }
+                if (dataUri != null) parts.add("![${attachment.name}]($dataUri)")
+            } else {
+                // Non-image: embed as base64 data URI so the server can read it
+                val dataUri = withContext(Dispatchers.IO) {
+                    try {
+                        val bytes = appContext.contentResolver.openInputStream(attachment.uri)?.use {
+                            it.readBytes()
+                        } ?: return@withContext null
+                        val base64 = Base64.encodeToString(bytes, Base64.NO_WRAP)
+                        val mime = attachment.mimeType ?: "application/octet-stream"
+                        "data:$mime;base64,$base64"
+                    } catch (e: Exception) {
+                        Log.e(TAG, "Failed to read file attachment ${attachment.name}", e)
+                        null
+                    }
+                }
+                if (dataUri != null) {
+                    parts.add("[${attachment.name}]($dataUri)")
+                } else {
+                    parts.add("[Attached file: ${attachment.name}]")
+                }
+            }
+        }
+        if (text.isNotBlank()) parts.add(text)
         return parts.joinToString("\n\n")
     }
 
