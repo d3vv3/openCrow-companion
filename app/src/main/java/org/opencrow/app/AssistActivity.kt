@@ -49,7 +49,7 @@ class AssistActivity : ComponentActivity() {
         assistViewModel.setScreenshotPath(screenshotPath)
         val initialMessage = resolveInitialMessage(intent)
         if (initialMessage != null) {
-            assistViewModel.setInitialMessage(initialMessage)
+            assistViewModel.setInitialComposing(initialMessage)
         }
         val sharedContent = resolveSharedContent(intent)
         if (sharedContent != null) {
@@ -71,11 +71,11 @@ class AssistActivity : ComponentActivity() {
         // Android text-selection popup (ACTION_PROCESS_TEXT)
         if (intent.action == Intent.ACTION_PROCESS_TEXT) {
             val selected = intent.getCharSequenceExtra(Intent.EXTRA_PROCESS_TEXT)?.toString()
-            if (!selected.isNullOrBlank()) return "Translate this:\n$selected"
+            if (!selected.isNullOrBlank()) return "Translate this:\n$selected\n\nTranslate to "
         }
         // Internal translate_text extra
         val translateText = intent.getStringExtra("translate_text")
-        if (!translateText.isNullOrBlank()) return "Translate this:\n$translateText"
+        if (!translateText.isNullOrBlank()) return "Translate this:\n$translateText\n\nTranslate to "
         return null
     }
 
@@ -156,7 +156,7 @@ class AssistActivity : ComponentActivity() {
                 // Fire the initial message once after the screen is ready
                 LaunchedEffect(Unit) {
                     if (initialMessage != null) {
-                        assistViewModel.setInitialMessage(initialMessage)
+                        assistViewModel.setInitialComposing(initialMessage)
                     } else if (sharedContent != null) {
                         if (sharedContent.text != null) assistViewModel.setInitialComposing(sharedContent.text)
                         if (sharedContent.attachments.isNotEmpty()) assistViewModel.addAttachments(sharedContent.attachments)

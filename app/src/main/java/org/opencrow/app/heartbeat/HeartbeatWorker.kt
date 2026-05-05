@@ -30,7 +30,9 @@ class HeartbeatWorker(
     companion object {
         private const val TAG = "HeartbeatWorker"
         private const val NOTIF_CHANNEL_HEARTBEAT = "opencrow_heartbeat"
+        private const val NOTIF_CHANNEL_EVENTS = "opencrow_events"
         private const val NOTIF_ID_HEARTBEAT = 9001
+        private const val NOTIF_ID_EVENTS_BASE = 9100
     }
 
     override suspend fun doWork(): Result {
@@ -76,7 +78,6 @@ class HeartbeatWorker(
             }
 
             // ── 3. Send heartbeat prompt (with remaining instruction tasks) ─
-            checkNotifications(apiClient)
             val calendarPrompt = queryCalendar()
             val dateTime = SimpleDateFormat("EEEE, MMMM d, yyyy 'at' HH:mm z", Locale.getDefault())
                 .format(Date())
@@ -348,6 +349,52 @@ If anything needs attention, respond concisely with what changed and what action
             .setAutoCancel(true)
             .build()
         nm.notify(NOTIF_ID_HEARTBEAT, notif)
+    }
+
+    /**
+     * Shows a local notification for each pending heartbeat event.
+     * This is the fallback notification path when UnifiedPush is not available --
+     * the heartbeat poller picks up events from the server and surfaces them locally.
+     * Only events with status "TRIGGERED" or "PENDING" are shown; already-seen events
+     * are deduplicated by persisting the last-seen event ID in SharedPreferences.
+     */
+    private fun showEventNotifications(events: List<HeartbeatEventDto>) {
+        if (events.isEmpty()) return
+        val nm = applicationContext.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
+        if (nm.getNotificationChannel(NOTIF_CHANNEL_EVENTS) == null) {
+            val ch = NotificationChannel(
+                NOTIF_CHANNEL_EVENTS,
+                "openCrow Notifications",
+                NotificationManager.IMPORTANCE_HIGH
+            ).apply { description = "AI assistant notifications and alerts" }
+            nm.createNotificationChannel(ch)
+        }
+
+        val prefs = applicationContext.getSharedPreferences("heartbeat_notif", Context.MODE_PRIVATE)
+        val seenIds = prefs.getStringSet("seen_event_ids", emptySet())!!.toMutableSet()
+
+        var notifId = NOTIF_ID_EVENTS_BASE
+        val newSeenIds = seenIds.toMutableSet()
+
+        for (event in events) {
+            if (event.id in seenIds) continue
+            val message = event.message?.takeIf { it.isNotBlank() } ?: continue
+            val notif = NotificationCompat.Builder(applicationContext, NOTIF_CHANNEL_EVENTS)
+                .setSmallIcon(R.mipmap.ic_launcher)
+                .setContentTitle("openCrow")
+                .setContentText(message.take(100))
+                .setStyle(NotificationCompat.BigTextStyle().bigText(message))
+                .setPriority(NotificationCompat.PRIORITY_HIGH)
+                .setAutoCancel(true)
+                .build()
+            nm.notify(notifId++, notif)
+            newSeenIds.add(event.id)
+        }
+
+        // Prune old IDs -- keep only IDs still present in the current event list to avoid unbounded growth
+        val currentIds = events.map { it.id }.toSet()
+        val pruned = newSeenIds.intersect(currentIds).toMutableList().takeLast(50).toSet()
+        prefs.edit().putStringSet("seen_event_ids", pruned).apply()
     }
 
     /**

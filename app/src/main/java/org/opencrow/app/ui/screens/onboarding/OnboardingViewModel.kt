@@ -171,7 +171,12 @@ class OnboardingViewModel(application: Application) : AndroidViewModel(applicati
                 tag == "up_skip" -> {
                     addUserMessage("Skip")
                     delay(200)
-                    finish()
+                    continueToPairing()
+                }
+                tag == "pair" -> {
+                    addUserMessage("Pair device")
+                    delay(200)
+                    markDoneAndFinish()
                 }
             }
         }
@@ -214,18 +219,14 @@ class OnboardingViewModel(application: Application) : AndroidViewModel(applicati
     private suspend fun continueToUnifiedPush() {
         val distributors = UnifiedPush.getDistributors(ctx)
         if (distributors.isEmpty()) {
-            typeMessage("You're all set! Let's get started.")
-            delay(300)
-            markDoneAndFinish()
+            continueToPairing()
             return
         }
 
         val active = UnifiedPush.getAckDistributor(ctx)
         if (!active.isNullOrBlank()) {
             // Already configured
-            typeMessage("You're all set! Let's get started.")
-            delay(300)
-            markDoneAndFinish()
+            continueToPairing()
             return
         }
 
@@ -247,15 +248,17 @@ class OnboardingViewModel(application: Application) : AndroidViewModel(applicati
         if (deviceId.isNotBlank()) {
             UnifiedPush.register(ctx, instance = deviceId)
         }
-        typeMessage("Push notifications configured! You're all set.")
-        delay(300)
-        markDoneAndFinish()
+        typeMessage("Push notifications configured!")
+        delay(200)
+        continueToPairing()
     }
 
-    private suspend fun finish() {
-        typeMessage("No problem. You're all set! Let's get started.")
+    private suspend fun continueToPairing() {
+        typeMessage("Almost there! To connect this device, open the **openCrow web app**, go to **Configuration -> Devices -> Add Device**, and generate a QR pairing code.")
         delay(300)
-        markDoneAndFinish()
+        _state.update {
+            it.copy(actions = listOf(OnboardingAction("Pair Device", "pair")))
+        }
     }
 
     private suspend fun markDoneAndFinish() {

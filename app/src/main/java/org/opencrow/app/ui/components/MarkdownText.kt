@@ -1,7 +1,10 @@
 package org.opencrow.app.ui.components
 
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.ClickableText
 import androidx.compose.material.icons.Icons
@@ -13,6 +16,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.foundation.layout.IntrinsicSize
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalUriHandler
 import androidx.compose.ui.text.*
@@ -26,7 +30,7 @@ import androidx.compose.ui.unit.sp
 /**
  * Renders markdown-formatted text as Compose AnnotatedString.
  * Supports: **bold**, *italic*, `inline code`, ```code blocks```,
- * [links](url), - bullet lists, and # headings.
+ * [links](url), - bullet lists, # headings, and GFM tables.
  */
 @Composable
 fun MarkdownText(
@@ -39,78 +43,168 @@ fun MarkdownText(
     val codeBackground = MaterialTheme.colorScheme.surfaceContainerHighest
     val linkColor = MaterialTheme.colorScheme.primary
 
-    // Split into code blocks vs inline segments (memoized)
-    val segments = remember(text) { splitCodeBlocks(text) }
+    // Split into code blocks, tables, and inline segments (memoized)
+    val segments = remember(text) { splitSegments(text) }
 
     Column(modifier = modifier, verticalArrangement = Arrangement.spacedBy(4.dp)) {
         for (segment in segments) {
-            if (segment.isCodeBlock) {
-                // Fenced code block
-                Box(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .clip(RoundedCornerShape(6.dp))
-                        .background(codeBackground)
-                        .padding(10.dp)
-                ) {
-                    Text(
-                        text = segment.content,
-                        style = style.copy(
-                            fontFamily = FontFamily.Monospace,
-                            fontSize = (style.fontSize.value - 1).sp,
-                            color = color
+            when (segment) {
+                is Segment.Code -> {
+                    // Fenced code block
+                    Box(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clip(RoundedCornerShape(6.dp))
+                            .background(codeBackground)
+                            .padding(10.dp)
+                    ) {
+                        Text(
+                            text = segment.content,
+                            style = style.copy(
+                                fontFamily = FontFamily.Monospace,
+                                fontSize = (style.fontSize.value - 1).sp,
+                                color = color
+                            )
                         )
+                    }
+                }
+                is Segment.Table -> {
+                    MarkdownTable(
+                        headers = segment.headers,
+                        rows = segment.rows,
+                        color = color,
+                        style = style
                     )
                 }
-            } else {
-                // Parse inline markdown per line for list/heading support
-                val lines = remember(segment.content) { segment.content.split("\n") }
-                for (line in lines) {
-                    if (line.isBlank()) {
-                        Spacer(Modifier.height(4.dp))
-                        continue
-                    }
-                    // Memoize the structural parse separately from colors
-                    val parsed = remember(line) {
-                        parseInlineMarkdownStructure(line)
-                    }
-                    val (annotated, urlMap) = remember(parsed, color, linkColor, codeBackground) {
-                        applyInlineMarkdownStyle(
-                            parsed = parsed,
-                            baseStyle = style.copy(color = color),
-                            linkColor = linkColor,
-                            codeBackground = codeBackground
-                        )
-                    }
-                    if (urlMap.isNotEmpty()) {
-                        ClickableText(
-                            text = annotated,
-                            style = style.copy(color = color),
-                            onClick = { offset ->
-                                annotated.getStringAnnotations("URL", offset, offset)
-                                    .firstOrNull()?.let { uriHandler.openUri(it.item) }
-                            }
-                        )
-                    } else {
-                        Text(text = annotated)
-                    }
+                is Segment.Text -> {
+                    // Parse inline markdown per line for list/heading support
+                    val lines = remember(segment.content) { segment.content.split("\n") }
+                    for (line in lines) {
+                        if (line.isBlank()) {
+                            Spacer(Modifier.height(4.dp))
+                            continue
+                        }
+                        // Memoize the structural parse separately from colors
+                        val parsed = remember(line) {
+                            parseInlineMarkdownStructure(line)
+                        }
+                        val (annotated, urlMap) = remember(parsed, color, linkColor, codeBackground) {
+                            applyInlineMarkdownStyle(
+                                parsed = parsed,
+                                baseStyle = style.copy(color = color),
+                                linkColor = linkColor,
+                                codeBackground = codeBackground
+                            )
+                        }
+                        if (urlMap.isNotEmpty()) {
+                            ClickableText(
+                                text = annotated,
+                                style = style.copy(color = color),
+                                onClick = { offset ->
+                                    annotated.getStringAnnotations("URL", offset, offset)
+                                        .firstOrNull()?.let { uriHandler.openUri(it.item) }
+                                }
+                            )
+                        } else {
+                            Text(text = annotated)
+                        }
 
-                    // Render images and files found in this line
-                    val images = parsed.tokens.filterIsInstance<InlineToken.Image>()
-                    val files = parsed.tokens.filterIsInstance<InlineToken.FileAttachment>()
-                    
-                    if (images.isNotEmpty() || files.isNotEmpty()) {
-                        Column(
-                            modifier = Modifier.padding(vertical = 4.dp),
-                            verticalArrangement = Arrangement.spacedBy(8.dp)
-                        ) {
-                            for (img in images) {
-                                ImageAttachment(alt = img.alt, url = img.url)
-                            }
-                            for (file in files) {
-                                FileAttachmentRow(name = file.name)
+                        // Render images and files found in this line
+                        val images = parsed.tokens.filterIsInstance<InlineToken.Image>()
+                        val files = parsed.tokens.filterIsInstance<InlineToken.FileAttachment>()
+
+                        if (images.isNotEmpty() || files.isNotEmpty()) {
+                            Column(
+                                modifier = Modifier.padding(vertical = 4.dp),
+                                verticalArrangement = Arrangement.spacedBy(8.dp)
+                            ) {
+                                for (img in images) {
+                                    ImageAttachment(alt = img.alt, url = img.url)
+                                }
+                                for (file in files) {
+                                    FileAttachmentRow(name = file.name)
+                                }
                             }
                         }
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun MarkdownTable(
+    headers: List<String>,
+    rows: List<List<String>>,
+    color: Color,
+    style: TextStyle
+) {
+    val borderColor = color.copy(alpha = 0.15f)
+    val headerBackground = color.copy(alpha = 0.07f)
+
+    // Column-major layout: each column is a Column{} with width(IntrinsicSize.Max) so
+    // all cells in a column share the same width (widest cell wins), making headers and
+    // data cells align correctly. The outer Row has height(IntrinsicSize.Min) so the
+    // vertical-divider Boxes can use fillMaxHeight().
+    Row(
+        modifier = Modifier
+            .horizontalScroll(rememberScrollState())
+            .border(1.dp, borderColor, RoundedCornerShape(6.dp))
+            .clip(RoundedCornerShape(6.dp))
+            .height(IntrinsicSize.Min)
+    ) {
+        headers.forEachIndexed { colIndex, header ->
+            // Vertical divider between columns
+            if (colIndex > 0) {
+                Box(
+                    modifier = Modifier
+                        .width(1.dp)
+                        .fillMaxHeight()
+                        .background(borderColor)
+                )
+            }
+            Column(modifier = Modifier.width(IntrinsicSize.Max)) {
+                // Header cell
+                Box(
+                    modifier = Modifier
+                        .background(headerBackground)
+                        .fillMaxWidth()
+                ) {
+                    Text(
+                        text = header,
+                        style = style.copy(
+                            fontWeight = FontWeight.SemiBold,
+                            color = color
+                        ),
+                        modifier = Modifier
+                            .padding(horizontal = 12.dp, vertical = 8.dp)
+                            .widthIn(min = 60.dp)
+                    )
+                }
+                HorizontalDivider(color = borderColor)
+                // Data cells
+                rows.forEachIndexed { rowIndex, row ->
+                    val cell = row.getOrElse(colIndex) { "" }
+                    Box(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .then(
+                                if (rowIndex % 2 == 1)
+                                    Modifier.background(color.copy(alpha = 0.04f))
+                                else Modifier
+                            )
+                    ) {
+                        Text(
+                            text = cell,
+                            style = style.copy(color = color.copy(alpha = 0.85f)),
+                            modifier = Modifier
+                                .padding(horizontal = 12.dp, vertical = 7.dp)
+                                .widthIn(min = 60.dp)
+                        )
+                    }
+                    if (rowIndex < rows.lastIndex) {
+                        HorizontalDivider(color = borderColor)
                     }
                 }
             }
@@ -135,13 +229,121 @@ private fun ImageAttachment(alt: String, url: String) {
                 .build(),
             contentDescription = alt,
             modifier = Modifier.fillMaxWidth(),
-            contentScale = androidx.compose.ui.layout.ContentScale.FillWidth
+            contentScale = ContentScale.FillWidth
         )
     }
 }
 
+// ---------------------------------------------------------------------------
+// Segment model
+// ---------------------------------------------------------------------------
+
+private sealed class Segment {
+    data class Text(val content: String) : Segment()
+    data class Code(val content: String) : Segment()
+    data class Table(val headers: List<String>, val rows: List<List<String>>) : Segment()
+}
+
+// ---------------------------------------------------------------------------
+// Splitting logic
+// ---------------------------------------------------------------------------
+
+/**
+ * Splits raw markdown text into [Segment.Code], [Segment.Table], and [Segment.Text] segments.
+ */
+private fun splitSegments(text: String): List<Segment> {
+    // First split by fenced code blocks
+    val afterCodeSplit = splitCodeBlocks(text)
+
+    // Then, for each text segment, extract GFM tables
+    val result = mutableListOf<Segment>()
+    for (seg in afterCodeSplit) {
+        if (seg.isCodeBlock) {
+            result += Segment.Code(seg.content)
+        } else {
+            result += extractTables(seg.content)
+        }
+    }
+    return result
+}
 
 private data class TextSegment(val content: String, val isCodeBlock: Boolean)
+
+private fun splitCodeBlocks(text: String): List<TextSegment> {
+    val segments = mutableListOf<TextSegment>()
+    val pattern = Regex("```(?:\\w*\\n)?([\\s\\S]*?)```")
+    var lastEnd = 0
+
+    for (match in pattern.findAll(text)) {
+        val before = text.substring(lastEnd, match.range.first)
+        if (before.isNotEmpty()) segments += TextSegment(before.trim(), false)
+        segments += TextSegment(match.groupValues[1].trimEnd(), true)
+        lastEnd = match.range.last + 1
+    }
+    val remaining = text.substring(lastEnd)
+    if (remaining.isNotEmpty()) segments += TextSegment(remaining.trim(), false)
+    return segments
+}
+
+/**
+ * Scans a plain-text segment for GFM table blocks and returns a mixed list of
+ * [Segment.Text] and [Segment.Table] segments.
+ *
+ * A GFM table looks like:
+ *   | Col1 | Col2 |
+ *   |------|------|
+ *   | val1 | val2 |
+ */
+private fun extractTables(text: String): List<Segment> {
+    val lines = text.split("\n")
+    val result = mutableListOf<Segment>()
+    val pendingText = StringBuilder()
+
+    var i = 0
+    while (i < lines.size) {
+        val line = lines[i]
+        // Detect a header row followed by a separator row
+        if (isTableRow(line) && i + 1 < lines.size && isTableSeparator(lines[i + 1])) {
+            // Flush pending text
+            val pending = pendingText.toString().trim()
+            if (pending.isNotEmpty()) result += Segment.Text(pending)
+            pendingText.clear()
+
+            val headers = parseTableRow(line)
+            i += 2 // skip header + separator
+
+            val rows = mutableListOf<List<String>>()
+            while (i < lines.size && isTableRow(lines[i])) {
+                rows += parseTableRow(lines[i])
+                i++
+            }
+            result += Segment.Table(headers, rows)
+        } else {
+            pendingText.appendLine(line)
+            i++
+        }
+    }
+    val pending = pendingText.toString().trim()
+    if (pending.isNotEmpty()) result += Segment.Text(pending)
+    return result
+}
+
+private fun isTableRow(line: String): Boolean =
+    line.trim().startsWith("|") && line.trim().endsWith("|")
+
+private fun isTableSeparator(line: String): Boolean =
+    line.trim().matches(Regex("\\|[-|: ]+\\|"))
+
+private fun parseTableRow(line: String): List<String> =
+    line.trim()
+        .removePrefix("|")
+        .removeSuffix("|")
+        .split("|")
+        .map { it.trim() }
+
+// ---------------------------------------------------------------------------
+// Inline markdown parsing
+// ---------------------------------------------------------------------------
 
 /**
  * Intermediate structural representation of parsed inline markdown.
@@ -163,22 +365,6 @@ private sealed class InlineToken {
     data class FileAttachment(val name: String) : InlineToken()
 }
 
-private fun splitCodeBlocks(text: String): List<TextSegment> {
-    val segments = mutableListOf<TextSegment>()
-    val pattern = Regex("```(?:\\w*\\n)?([\\s\\S]*?)```")
-    var lastEnd = 0
-
-    for (match in pattern.findAll(text)) {
-        val before = text.substring(lastEnd, match.range.first)
-        if (before.isNotEmpty()) segments += TextSegment(before.trim(), false)
-        segments += TextSegment(match.groupValues[1].trimEnd(), true)
-        lastEnd = match.range.last + 1
-    }
-    val remaining = text.substring(lastEnd)
-    if (remaining.isNotEmpty()) segments += TextSegment(remaining.trim(), false)
-    return segments
-}
-
 /**
  * Parses the structural tokens from a markdown line (expensive regex work).
  * This result is memoized independently of colors/styles.
@@ -189,7 +375,7 @@ private fun parseInlineMarkdownStructure(line: String): InlineMarkdownStructure 
 
     val rawLine = when {
         headingMatch != null -> headingMatch.groupValues[2]
-        bulletMatch != null -> "• ${bulletMatch.groupValues[1]}"
+        bulletMatch != null -> "- ${bulletMatch.groupValues[1]}"
         else -> line
     }
 

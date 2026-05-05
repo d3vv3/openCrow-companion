@@ -1,10 +1,18 @@
 package org.opencrow.app.ui.screens.chat
 
 import android.Manifest
+import android.app.Activity
+import android.content.ComponentName
+import android.content.Context
+import android.content.Intent
 import android.content.pm.PackageManager
+import android.net.Uri
 import android.provider.OpenableColumns
+import android.provider.MediaStore
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.core.content.FileProvider
+import java.io.File
 import androidx.compose.animation.*
 import androidx.compose.animation.core.*
 import androidx.compose.foundation.background
@@ -21,6 +29,7 @@ import androidx.compose.material.icons.outlined.*
 import androidx.compose.material3.*
 import androidx.compose.material3.pulltorefresh.PullToRefreshBox
 import androidx.compose.runtime.*
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
@@ -33,6 +42,9 @@ import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.core.content.ContextCompat
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleEventObserver
+import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.lifecycle.viewmodel.compose.viewModel
 import org.opencrow.app.OpenCrowApp
 import org.opencrow.app.ui.screens.chat.components.AttachmentPreviewRow
@@ -325,30 +337,17 @@ fun ChatScreen(
                     .align(Alignment.BottomCenter)
             ) {
                 if (!isTelegramChat) {
-                    // Attachment preview
+                    // Attachment thumbnails float above the input bar, no container
                     AnimatedVisibility(
                         visible = state.attachments.isNotEmpty(),
                         enter = slideInVertically(initialOffsetY = { it }) + fadeIn(),
                         exit = slideOutVertically(targetOffsetY = { it }) + fadeOut()
                     ) {
-                        Box(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .padding(horizontal = spacing.md)
-                                .padding(bottom = spacing.xs)
-                        ) {
-                            Surface(
-                                color = MaterialTheme.colorScheme.surfaceContainerHigh,
-                                shape = RoundedCornerShape(16.dp),
-                                shadowElevation = 4.dp,
-                                modifier = Modifier.fillMaxWidth()
-                            ) {
-                                AttachmentPreviewRow(
-                                    attachments = state.attachments,
-                                    onRemove = viewModel::removeAttachment
-                                )
-                            }
-                        }
+                        AttachmentPreviewRow(
+                            attachments = state.attachments,
+                            onRemove = viewModel::removeAttachment,
+                            modifier = Modifier.padding(horizontal = spacing.md, vertical = spacing.xs)
+                        )
                     }
                 }
 
@@ -449,7 +448,57 @@ private fun ChatInputBar(
 ) {
     val spacing = LocalSpacing.current
     val context = LocalContext.current
+    val lifecycleOwner = LocalLifecycleOwner.current
     var showAttachPopup by remember { mutableStateOf(false) }
+    // rememberSaveable so the URI survives process death while the camera app is open
+    var cameraImageUri by rememberSaveable { mutableStateOf<Uri?>(null) }
+    var pendingCameraCapture by rememberSaveable { mutableStateOf(false) }
+
+    // Manual camera launcher so we can use an explicit component fallback on Pixels.
+    val cameraLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.StartActivityForResult()
+    ) { result ->
+        pendingCameraCapture = false
+        if (result.resultCode == Activity.RESULT_OK) {
+            val uri = cameraImageUri ?: return@rememberLauncherForActivityResult
+            val name = "photo_${System.currentTimeMillis()}.jpg"
+            onAddAttachments(listOf(Attachment(uri = uri, name = name, mimeType = "image/jpeg")))
+            cameraImageUri = null
+        }
+    }
+
+    DisposableEffect(lifecycleOwner, cameraImageUri, pendingCameraCapture) {
+        val observer = LifecycleEventObserver { _, event ->
+            if (event == Lifecycle.Event.ON_RESUME && pendingCameraCapture) {
+                val uri = cameraImageUri
+                if (uri != null && uriHasContent(context, uri)) {
+                    pendingCameraCapture = false
+                    val name = "photo_${System.currentTimeMillis()}.jpg"
+                    onAddAttachments(listOf(Attachment(uri = uri, name = name, mimeType = "image/jpeg")))
+                    cameraImageUri = null
+                }
+            }
+        }
+        lifecycleOwner.lifecycle.addObserver(observer)
+        onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
+    }
+
+    val cameraPermissionLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.RequestPermission()
+    ) { granted ->
+        if (granted) doLaunchCamera(context, cameraLauncher, onPending = { pendingCameraCapture = it }) { cameraImageUri = it }
+    }
+
+    fun launchCamera() {
+        showAttachPopup = false
+        if (ContextCompat.checkSelfPermission(context, Manifest.permission.CAMERA) ==
+            PackageManager.PERMISSION_GRANTED
+        ) {
+            doLaunchCamera(context, cameraLauncher, onPending = { pendingCameraCapture = it }) { cameraImageUri = it }
+        } else {
+            cameraPermissionLauncher.launch(Manifest.permission.CAMERA)
+        }
+    }
 
     // File picker (any file type, multiple)
     val filePicker = rememberLauncherForActivityResult(
@@ -536,6 +585,17 @@ private fun ChatInputBar(
                             leadingIcon = {
                                 Icon(
                                     Icons.Outlined.Image,
+                                    contentDescription = null,
+                                    tint = MaterialTheme.colorScheme.primary
+                                )
+                            }
+                        )
+                        DropdownMenuItem(
+                            text = { Text("Camera") },
+                            onClick = { launchCamera() },
+                            leadingIcon = {
+                                Icon(
+                                    Icons.Outlined.CameraAlt,
                                     contentDescription = null,
                                     tint = MaterialTheme.colorScheme.primary
                                 )
@@ -637,5 +697,91 @@ private fun ChatInputBar(
             }
         }
         }
+    }
+}
+
+/**
+ * Creates a temp file via FileProvider and launches the camera using an explicit component
+ * when available. Some Pixel builds expose IMAGE_CAPTURE in the manifest but do not resolve
+ * it implicitly; explicit component fallback avoids that.
+ */
+private fun doLaunchCamera(
+    context: Context,
+    launcher: androidx.activity.result.ActivityResultLauncher<Intent>,
+    onPending: (Boolean) -> Unit,
+    onUriReady: (Uri) -> Unit
+) {
+    val photoFile = try {
+        File(
+            context.cacheDir.resolve("camera").also { it.mkdirs() },
+            "photo_${System.currentTimeMillis()}.jpg"
+        )
+    } catch (e: Exception) {
+        android.util.Log.e("Camera", "Could not create photo file", e)
+        android.widget.Toast.makeText(context, "Could not create photo file", android.widget.Toast.LENGTH_SHORT).show()
+        return
+    }
+    val uri = FileProvider.getUriForFile(context, "${context.packageName}.fileprovider", photoFile)
+    val captureIntent = buildCameraIntent(context, uri)
+    val grantIntent = Intent(MediaStore.ACTION_IMAGE_CAPTURE)
+    context.packageManager.queryIntentActivities(grantIntent, PackageManager.MATCH_DEFAULT_ONLY)
+        .plus(context.packageManager.queryIntentActivities(Intent(MediaStore.INTENT_ACTION_STILL_IMAGE_CAMERA), PackageManager.MATCH_DEFAULT_ONLY))
+        .map { it.activityInfo.packageName }
+        .distinct()
+        .forEach { packageName ->
+            context.grantUriPermission(
+                packageName,
+                uri,
+                Intent.FLAG_GRANT_WRITE_URI_PERMISSION or Intent.FLAG_GRANT_READ_URI_PERMISSION
+            )
+        }
+    onUriReady(uri)
+    try {
+        onPending(true)
+        launcher.launch(captureIntent)
+    } catch (e: android.content.ActivityNotFoundException) {
+        onPending(false)
+        android.util.Log.e("Camera", "No camera app found", e)
+        android.widget.Toast.makeText(context, "No camera app found", android.widget.Toast.LENGTH_SHORT).show()
+    }
+}
+
+private fun buildCameraIntent(context: Context, uri: Uri): Intent {
+    val packageManager = context.packageManager
+    val implicitCapture = Intent(MediaStore.ACTION_IMAGE_CAPTURE).apply {
+        putExtra(MediaStore.EXTRA_OUTPUT, uri)
+        addFlags(Intent.FLAG_GRANT_WRITE_URI_PERMISSION or Intent.FLAG_GRANT_READ_URI_PERMISSION)
+    }
+
+    val captureHandler = packageManager.resolveActivity(
+        implicitCapture,
+        PackageManager.MATCH_DEFAULT_ONLY
+    )
+    if (captureHandler != null) return implicitCapture
+
+    val explicitCapture = Intent(MediaStore.ACTION_IMAGE_CAPTURE).apply {
+        component = ComponentName(
+            "com.google.android.GoogleCamera",
+            "com.android.camera.activity.CaptureActivity"
+        )
+        putExtra(MediaStore.EXTRA_OUTPUT, uri)
+        addFlags(Intent.FLAG_GRANT_WRITE_URI_PERMISSION or Intent.FLAG_GRANT_READ_URI_PERMISSION)
+    }
+    if (explicitCapture.resolveActivity(packageManager) != null) return explicitCapture
+
+    return Intent(MediaStore.INTENT_ACTION_STILL_IMAGE_CAMERA).apply {
+        component = ComponentName(
+            "com.google.android.GoogleCamera",
+            "com.android.camera.CameraImageActivity"
+        )
+        addFlags(Intent.FLAG_GRANT_WRITE_URI_PERMISSION or Intent.FLAG_GRANT_READ_URI_PERMISSION)
+    }
+}
+
+private fun uriHasContent(context: Context, uri: Uri): Boolean {
+    return try {
+        context.contentResolver.openAssetFileDescriptor(uri, "r")?.use { it.length > 0 } == true
+    } catch (_: Exception) {
+        false
     }
 }
