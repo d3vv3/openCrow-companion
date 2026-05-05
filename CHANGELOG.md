@@ -1,3 +1,10 @@
+## [1.4.2](https://github.com/d3vv3/openCrow-companion/compare/v1.4.1...v1.4.2) (2026-05-05)
+
+
+### Bug Fixes
+
+* Table markdown formatting, pairing onboarding, camera ([7d01095](https://github.com/d3vv3/openCrow-companion/commit/7d01095014f5aa8fc04c4ae903588e372abf0a0b))
+
 ## [1.4.1](https://github.com/d3vv3/openCrow-companion/compare/v1.4.0...v1.4.1) (2026-05-02)
 
 
