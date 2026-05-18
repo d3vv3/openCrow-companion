@@ -2,9 +2,10 @@ package org.opencrow.app.data.remote
 
 import android.util.Log
 import com.google.gson.GsonBuilder
-import kotlinx.coroutines.CoroutineScope
-import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.launch
+import kotlinx.coroutines.flow.MutableSharedFlow
+import kotlinx.coroutines.flow.SharedFlow
+import kotlinx.coroutines.flow.asSharedFlow
+import kotlinx.coroutines.runBlocking
 import okhttp3.Interceptor
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.OkHttpClient
@@ -26,6 +27,10 @@ class ApiClient(private val configDao: ConfigDao) {
 
     val api: OpenCrowApi get() = _api ?: throw IllegalStateException("API not initialized. Scan QR first.")
     val isConfigured: Boolean get() = _api != null
+
+    /** Emits Unit whenever a token refresh fails permanently (session expired / revoked). */
+    private val _authExpired = MutableSharedFlow<Unit>(extraBufferCapacity = 1)
+    val authExpired: SharedFlow<Unit> = _authExpired.asSharedFlow()
 
     suspend fun initialize() {
         val server = configDao.get("server") ?: return
@@ -78,6 +83,9 @@ class ApiClient(private val configDao: ConfigDao) {
                         .build()
                     return@Interceptor chain.proceed(retry)
                 }
+                // Refresh failed permanently - notify observers so the UI can redirect to QR scan.
+                _authExpired.tryEmit(Unit)
+                return@Interceptor chain.proceed(request)
             }
             response
         }
@@ -122,8 +130,9 @@ class ApiClient(private val configDao: ConfigDao) {
                 )
                 _accessToken = authResp.tokens.accessToken
                 _refreshToken = authResp.tokens.refreshToken
-                // Persist refreshed tokens to DB so they survive app restarts
-                CoroutineScope(Dispatchers.IO).launch {
+                // Persist refreshed tokens synchronously so they survive app restarts
+                // even if the process is killed immediately after this call returns.
+                runBlocking {
                     try {
                         configDao.set(AppConfig("accessToken", authResp.tokens.accessToken))
                         configDao.set(AppConfig("refreshToken", authResp.tokens.refreshToken))

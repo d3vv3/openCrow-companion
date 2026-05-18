@@ -45,7 +45,20 @@ fun AppNavHost(
         }
     }
 
-    // ── Background token validation (non-blocking) ─────────────────────────────
+    // -- Auth-expired signal: redirect to QR scan whenever the token refresh fails --
+    LaunchedEffect(Unit) {
+        app.container.apiClient.authExpired.collect {
+            Log.w("AppNavHost", "Auth expired signal received, redirecting to QR scan")
+            app.container.apiClient.clearTokens()
+            val onboardingDone = app.container.apiClient.isOnboardingDone()
+            val dest = if (onboardingDone) Routes.QR_SCAN else Routes.ONBOARDING
+            navController.navigate(dest) {
+                popUpTo(0) { inclusive = true }
+            }
+        }
+    }
+
+    // -- Background token validation (non-blocking) -----------------------------
     // Runs after the UI is already shown. If the session is dead and cannot be
     // refreshed, clears credentials and redirects to onboarding.
     LaunchedEffect(startDest) {
