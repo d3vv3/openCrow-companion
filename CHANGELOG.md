@@ -1,3 +1,10 @@
+## [1.4.3](https://github.com/d3vv3/openCrow-companion/compare/v1.4.2...v1.4.3) (2026-05-18)
+
+
+### Bug Fixes
+
+* Logout issues ([6ae4698](https://github.com/d3vv3/openCrow-companion/commit/6ae46982179b67d09b0b28dbeac9c60a00b070e7))
+
 ## [1.4.2](https://github.com/d3vv3/openCrow-companion/compare/v1.4.1...v1.4.2) (2026-05-05)
 
 
