@@ -59,22 +59,24 @@ fun AppNavHost(
     }
 
     // -- Background token validation (non-blocking) -----------------------------
-    // Runs after the UI is already shown. If the session is dead and cannot be
-    // refreshed, clears credentials and redirects to onboarding.
+    // Runs after the UI is already shown. Only redirects to QR scan when the
+    // server explicitly rejects our credentials (HTTP 401). Other failures
+    // (network errors, 5xx, etc) are treated as transient and ignored -- the
+    // ApiClient's `authExpired` flow is the authoritative signal for logout.
     LaunchedEffect(startDest) {
         if (startDest != Routes.CHAT) return@LaunchedEffect
 
-        val valid = try {
+        val explicitlyUnauthorized = try {
             val resp = app.container.apiClient.api.listConversations()
-            resp.isSuccessful
+            Log.i("AppNavHost", "Background auth check: HTTP ${resp.code()}")
+            resp.code() == 401
         } catch (e: Exception) {
-            Log.w("AppNavHost", "Background auth check failed: ${e.message}")
-            // Network error -- don't log out, assume transient
-            true
+            Log.w("AppNavHost", "Background auth check failed (transient): ${e.message}")
+            false
         }
 
-        if (!valid) {
-            Log.w("AppNavHost", "Session invalid after refresh attempt, logging out")
+        if (explicitlyUnauthorized) {
+            Log.w("AppNavHost", "Server returned 401 after refresh attempt, logging out")
             app.container.apiClient.clearTokens()
             val onboardingDone = app.container.apiClient.isOnboardingDone()
             val dest = if (onboardingDone) Routes.QR_SCAN else Routes.ONBOARDING

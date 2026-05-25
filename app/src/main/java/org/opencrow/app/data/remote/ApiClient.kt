@@ -33,9 +33,11 @@ class ApiClient(private val configDao: ConfigDao) {
     val authExpired: SharedFlow<Unit> = _authExpired.asSharedFlow()
 
     suspend fun initialize() {
-        val server = configDao.get("server") ?: return
-        val access = configDao.get("accessToken") ?: return
-        val refresh = configDao.get("refreshToken") ?: return
+        val server = configDao.get("server")
+        val access = configDao.get("accessToken")
+        val refresh = configDao.get("refreshToken")
+        Log.i("ApiClient", "initialize(): server=${server != null}, access=${access != null} (len=${access?.length ?: 0}), refresh=${refresh != null} (len=${refresh?.length ?: 0})")
+        if (server == null || access == null || refresh == null) return
         configure(server, access, refresh)
     }
 
@@ -76,16 +78,27 @@ class ApiClient(private val configDao: ConfigDao) {
 
             if (response.code == 401 && _refreshToken != null) {
                 response.close()
-                val refreshed = refreshTokenSync()
-                if (refreshed) {
-                    val retry = chain.request().newBuilder()
-                        .addHeader("Authorization", "Bearer ${_accessToken.orEmpty()}")
-                        .build()
-                    return@Interceptor chain.proceed(retry)
+                when (refreshTokenSync()) {
+                    RefreshResult.SUCCESS -> {
+                        val retry = chain.request().newBuilder()
+                            .addHeader("Authorization", "Bearer ${_accessToken.orEmpty()}")
+                            .build()
+                        return@Interceptor chain.proceed(retry)
+                    }
+                    RefreshResult.SERVER_REJECT -> {
+                        // Server explicitly rejected the refresh token (revoked/expired).
+                        // Notify UI to redirect to QR scan.
+                        Log.w("ApiClient", "Refresh token rejected by server, emitting authExpired")
+                        _authExpired.tryEmit(Unit)
+                        return@Interceptor chain.proceed(request)
+                    }
+                    RefreshResult.NETWORK_ERROR -> {
+                        // Transient network failure - don't log the user out.
+                        // Return the original 401 response so the caller can handle it.
+                        Log.w("ApiClient", "Refresh failed due to network error, not logging out")
+                        return@Interceptor chain.proceed(request)
+                    }
                 }
-                // Refresh failed permanently - notify observers so the UI can redirect to QR scan.
-                _authExpired.tryEmit(Unit)
-                return@Interceptor chain.proceed(request)
             }
             response
         }
@@ -113,7 +126,16 @@ class ApiClient(private val configDao: ConfigDao) {
             .create(OpenCrowApi::class.java)
     }
 
-    private fun refreshTokenSync(): Boolean {
+    /**
+     * Attempts to refresh the access token synchronously (called from OkHttp interceptor thread).
+     * Returns:
+     *   RefreshResult.SUCCESS       - tokens refreshed and persisted
+     *   RefreshResult.SERVER_REJECT - server responded with a non-2xx (token revoked / expired)
+     *   RefreshResult.NETWORK_ERROR - could not reach server (transient, do NOT log out)
+     */
+    private enum class RefreshResult { SUCCESS, SERVER_REJECT, NETWORK_ERROR }
+
+    private fun refreshTokenSync(): RefreshResult {
         return try {
             val plainClient = OkHttpClient.Builder().build()
             val gson = GsonBuilder().create()
@@ -140,11 +162,14 @@ class ApiClient(private val configDao: ConfigDao) {
                         Log.w("ApiClient", "Failed to persist refreshed tokens: ${e.message}")
                     }
                 }
-                true
-            } else false
+                RefreshResult.SUCCESS
+            } else {
+                Log.w("ApiClient", "Token refresh rejected by server: HTTP ${resp.code}")
+                RefreshResult.SERVER_REJECT
+            }
         } catch (e: Exception) {
-            Log.w("ApiClient", "Token refresh failed: ${e.message}")
-            false
+            Log.w("ApiClient", "Token refresh network error (transient): ${e.message}")
+            RefreshResult.NETWORK_ERROR
         }
     }
 
